@@ -12,6 +12,7 @@
 - TypeScript、单元测试、覆盖率、生产构建和双浏览器端到端门禁
 - Biome 格式与 lint、Playwright 自动可访问性检查
 - GitHub Issue Forms、Pull Request 模板和 CI 工作流
+- Apache License 2.0 开源授权
 
 ### Changed
 

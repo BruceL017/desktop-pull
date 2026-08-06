@@ -3,6 +3,7 @@
 Desktop Pull 是一款无需账户和服务端的本地优先浏览器任务管理器，当前版本提供中文收件箱快速创建、草稿恢复和 IndexedDB 本地持久化。
 
 [![CI](https://github.com/BruceL017/desktop-pull/actions/workflows/ci.yml/badge.svg)](https://github.com/BruceL017/desktop-pull/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 ## 当前能力
 
@@ -101,6 +102,6 @@ tests/
 - 参与开发前请阅读[贡献指南](CONTRIBUTING.md)与[行为准则](CODE_OF_CONDUCT.md)
 - 安全漏洞请按[安全政策](SECURITY.md)通过 GitHub 私密报告，不要创建公开 Issue
 
-## 授权
+## 许可证
 
-源代码公开可读。项目许可证正在由维护者确认；在 `LICENSE` 文件加入前，不授予外部使用、复制、修改或分发许可。
+本项目采用 [Apache License 2.0](LICENSE)。使用、修改和分发本项目时请遵守许可证条款。
