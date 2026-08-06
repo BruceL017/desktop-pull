@@ -1,10 +1,15 @@
 # 参与 Desktop Pull 开发
 
+欢迎提交可复现的缺陷报告、边界明确的功能建议、文档修正和带测试的代码改动。参与项目前请遵守[行为准则](CODE_OF_CONDUCT.md)。维护者按可用时间尽力处理，不承诺固定响应时限。
+
 ## 开发环境
 
+外部贡献者先 Fork 仓库，再克隆自己的 Fork；有直接写权限的维护者可以从上游仓库创建分支。
+
 ```bash
-git clone https://github.com/BruceL017/desktop-pull.git
+git clone https://github.com/YOUR-USERNAME/desktop-pull.git
 cd desktop-pull
+git remote add upstream https://github.com/BruceL017/desktop-pull.git
 npm ci
 npm exec -- playwright install chromium webkit
 npm run dev
@@ -31,8 +36,6 @@ Node.js 必须满足 `>=22.22.0`，npm 必须为 `11.14.1`。
 - `test: cover storage rollback`
 - `chore: update quality tooling`
 
-提交前确认 Git 使用 GitHub noreply 邮箱。
-
 ## Pull Request 流程
 
 1. 说明改动解决的问题、实现方式和验证结果。
@@ -49,3 +52,5 @@ Node.js 必须满足 `>=22.22.0`，npm 必须为 `11.14.1`。
 - `npm run test:e2e`：运行 Chromium 与 WebKit 场景
 
 涉及产品行为、持久化格式、依赖或运行边界时，先阅读 `project-context/` 中对应决策与契约。问题和需求通过 GitHub Issues 提交，具体实现讨论保留在对应 Issue 或 Pull Request 中。
+
+首次贡献可以从带有 `good first issue` 标签的问题开始。安全漏洞不要发布到 Issue；请按[安全政策](SECURITY.md)使用 GitHub 私密漏洞报告。

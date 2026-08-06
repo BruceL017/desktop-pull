@@ -1,6 +1,6 @@
 # Desktop Pull
 
-Desktop Pull 是供内部使用的本地优先浏览器任务管理器，当前版本聚焦默认中文收件箱的快速创建、草稿恢复与本地持久化。
+Desktop Pull 是一款无需账户和服务端的本地优先浏览器任务管理器，当前版本提供中文收件箱快速创建、草稿恢复和 IndexedDB 本地持久化。
 
 [![CI](https://github.com/BruceL017/desktop-pull/actions/workflows/ci.yml/badge.svg)](https://github.com/BruceL017/desktop-pull/actions/workflows/ci.yml)
 
@@ -18,7 +18,7 @@ Desktop Pull 是供内部使用的本地优先浏览器任务管理器，当前�
 
 - Node.js `>=22.22.0`
 - npm `11.14.1`
-- 可访问本私有仓库及 npm 依赖源
+- 可访问 npm 依赖源
 - 支持 IndexedDB 的现代浏览器
 - 运行端到端测试前已安装 Playwright 的 Chromium 与 WebKit
 
@@ -95,8 +95,12 @@ tests/
 - PWA、离线模式和英文界面切换
 - 远端同步
 
-## 内部使用声明
+## 贡献与安全
 
-Internal use only.
+- 问题与功能建议请提交到 [Issues](https://github.com/BruceL017/desktop-pull/issues)，一般讨论可使用 [Discussions](https://github.com/BruceL017/desktop-pull/discussions)
+- 参与开发前请阅读[贡献指南](CONTRIBUTING.md)与[行为准则](CODE_OF_CONDUCT.md)
+- 安全漏洞请按[安全政策](SECURITY.md)通过 GitHub 私密报告，不要创建公开 Issue
 
-本仓库仅供内部使用，未提供开源许可证，也未授权外部使用、复制、修改或分发。
+## 授权
+
+源代码公开可读。项目许可证正在由维护者确认；在 `LICENSE` 文件加入前，不授予外部使用、复制、修改或分发许可。
