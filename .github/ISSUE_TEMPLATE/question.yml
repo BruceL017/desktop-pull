@@ -1,0 +1,18 @@
+name: 使用问题
+description: 询问一个有明确答案的使用或开发问题
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: 开放性讨论请使用 Discussions；提交前先检查 README 和 project-context。
+  - type: textarea
+    id: question
+    attributes:
+      label: 问题
+      description: 说明你希望完成什么，以及具体卡在哪里。
+    validations:
+      required: true
+  - type: textarea
+    id: attempts
+    attributes:
+      label: 已尝试的操作

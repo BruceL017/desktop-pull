@@ -11,3 +11,8 @@
 ## 典型
 
 `clarification-log.md`(循环追问留痕)、外部研究 dossier、原始讨论记录。
+
+## 当前记录
+
+- `TP-M1-01-architecture-review.md`:首包生产与测试基线评审
+- `repository-quality-tooling-review.md`:首包完成后的开发质量工具评审

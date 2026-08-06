@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions
+    url: https://github.com/BruceL017/desktop-pull/discussions
+    about: 开放性问题和方案讨论请使用 Discussions。
+  - name: Security Advisories
+    url: https://github.com/BruceL017/desktop-pull/security/advisories/new
+    about: 安全漏洞请通过私密 Security Advisory 报告，不要创建公开 Issue。

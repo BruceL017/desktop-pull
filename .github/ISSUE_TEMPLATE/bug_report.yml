@@ -1,0 +1,45 @@
+name: Bug 报告
+description: 报告可复现的产品或开发问题
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: 提交前请先搜索现有 Issues，确认没有重复问题。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 描述实际行为以及问题造成的影响。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 ...
+        2. 执行 ...
+        3. 看到 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      placeholder: |
+        - 操作系统：
+        - 浏览器及版本：
+        - Commit 或版本：
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志或截图
+      description: 请先移除任务内容及其他敏感数据。

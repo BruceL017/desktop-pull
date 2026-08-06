@@ -1,0 +1,67 @@
+{
+  "name": "desktop-pull",
+  "version": "0.1.0",
+  "description": "A local-first browser task manager with resilient IndexedDB persistence.",
+  "private": true,
+  "type": "module",
+  "keywords": [
+    "task-manager",
+    "local-first",
+    "indexeddb",
+    "react",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BruceL017/desktop-pull.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BruceL017/desktop-pull/issues"
+  },
+  "homepage": "https://github.com/BruceL017/desktop-pull#readme",
+  "packageManager": "npm@11.14.1",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "quality": "biome ci .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "build": "tsc --noEmit && vite build",
+    "check": "npm run quality && npm run typecheck && npm run test:coverage && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "idb": "8.0.3",
+    "lucide-react": "1.28.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-router": "8.3.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@biomejs/biome": "2.5.7",
+    "@playwright/test": "1.62.1",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.3",
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.5",
+    "@vitest/coverage-v8": "4.1.10",
+    "fake-indexeddb": "6.2.5",
+    "jsdom": "30.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.0",
+    "vitest": "4.1.10"
+  }
+}
