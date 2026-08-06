@@ -4,8 +4,8 @@ import {
   backupDataSchema,
   categorySchema,
   draftSchema,
+  historyEventSchema,
   operationSequenceSchema,
-  taskCreatedEventSchema,
   taskOrderGroupSchema,
   taskSchema,
   uuidV4Schema,
@@ -43,6 +43,15 @@ async function databaseNames(): Promise<string[]> {
     throw new Error("浏览器无法证明本地数据库代次");
   }
   return (await indexedDB.databases()).flatMap(({ name }) => (name ? [name] : []));
+}
+
+async function deleteDatabase(name: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error(`无法清理非活跃数据库代次: ${name}`));
+  });
 }
 
 async function openControlDatabase(): Promise<IDBPDatabase<ControlDatabaseSchema>> {
@@ -190,7 +199,7 @@ export async function readWorkspace(
     categoryOrder: zodUuidArray(categoryOrder),
     taskOrderByCategory: groups.map((record) => taskOrderGroupSchema.parse(record)),
     drafts: drafts.map((record) => draftSchema.parse(record)),
-    history: history.map((record) => taskCreatedEventSchema.parse(record)),
+    history: history.map((record) => historyEventSchema.parse(record)),
   });
 }
 
@@ -236,13 +245,27 @@ export async function bootstrapDatabase(): Promise<DatabaseHandle> {
 
   const activation = activationRecordSchema.parse(activationValue);
   const expectedCoreName = coreDatabaseName(activation.generation);
-  if (
-    activation.state === "active" &&
-    (!coreNames.includes(expectedCoreName) ||
-      coreNames.some((name) => name !== expectedCoreName))
-  ) {
-    control.close();
-    throw new Error("无法证明唯一活跃核心数据库代次");
+  if (activation.state === "active") {
+    if (!coreNames.includes(expectedCoreName)) {
+      control.close();
+      throw new Error("无法证明唯一活跃核心数据库代次");
+    }
+    try {
+      await Promise.all(
+        coreNames
+          .filter((name) => name !== expectedCoreName)
+          .map((name) => deleteDatabase(name)),
+      );
+      const remainingCoreNames = (await databaseNames()).filter((name) =>
+        name.startsWith("desktop-pull-core-"),
+      );
+      if (remainingCoreNames.length !== 1 || remainingCoreNames[0] !== expectedCoreName) {
+        throw new Error("无法证明唯一活跃核心数据库代次");
+      }
+    } catch (error) {
+      control.close();
+      throw error;
+    }
   }
   if (
     activation.state === "initializing" &&

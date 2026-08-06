@@ -16,3 +16,4 @@
 
 - `TP-M1-01-architecture-review.md`:首包生产与测试基线评审
 - `repository-quality-tooling-review.md`:首包完成后的开发质量工具评审
+- `TP-M1-02-05-architecture-review.md`:M1 后续任务、平台与保护机制的实现边界评审

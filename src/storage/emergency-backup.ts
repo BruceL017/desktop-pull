@@ -16,20 +16,33 @@ export function createEmergencyBackup(
   });
 }
 
+export const createBackup = createEmergencyBackup;
+
+export function parseBackup(input: unknown): WorkspaceSnapshot {
+  return structuredClone(backupEnvelopeSchema.parse(input).data);
+}
+
 function filenameTime(exportedAt: string): string {
   return exportedAt.replaceAll(":", "-");
 }
 
-export function downloadEmergencyBackup(workspace: WorkspaceSnapshot): void {
-  const backup = createEmergencyBackup(workspace);
+export function downloadBackup(
+  workspace: WorkspaceSnapshot,
+  kind: "backup" | "emergency" = "backup",
+): void {
+  const backup = createBackup(workspace);
   const content = JSON.stringify(backup, null, 2);
   const blob = new Blob([content], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `desktop-pull-emergency-${filenameTime(backup.exportedAt)}.json`;
+  link.download = `desktop-pull-${kind}-${filenameTime(backup.exportedAt)}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export function downloadEmergencyBackup(workspace: WorkspaceSnapshot): void {
+  downloadBackup(workspace, "emergency");
 }
 
 export interface DeferredDraftWrite {

@@ -1,5 +1,10 @@
 import { createHashRouter, Navigate } from "react-router";
+import { AppLayout } from "./ui/AppLayout";
+import { BackupPage } from "./ui/BackupPage";
+import { HistoryPage } from "./ui/HistoryPage";
+import { SettingsPage } from "./ui/SettingsPage";
 import { TaskPage } from "./ui/TaskPage";
+import { TrashPage } from "./ui/TrashPage";
 
 export function normalizeColdStartHash(): void {
   if (window.location.hash === "#/") return;
@@ -12,7 +17,16 @@ export function normalizeColdStartHash(): void {
 
 export function createAppRouter() {
   return createHashRouter([
-    { path: "/", element: <TaskPage /> },
+    {
+      element: <AppLayout />,
+      children: [
+        { path: "/", element: <TaskPage /> },
+        { path: "/history", element: <HistoryPage /> },
+        { path: "/trash", element: <TrashPage /> },
+        { path: "/settings", element: <SettingsPage /> },
+        { path: "/backup", element: <BackupPage /> },
+      ],
+    },
     { path: "*", element: <Navigate to="/" replace /> },
   ]);
 }
