@@ -50,6 +50,7 @@ Node.js 必须满足 `>=22.22.0`，npm 必须为 `11.14.1`。
 - `npm run format`：写入 Biome 格式化结果
 - `npm run test:coverage`：运行单元测试并检查覆盖率阈值
 - `npm run test:e2e`：运行 Chromium 与 WebKit 场景
+- `npm run test:pwa`：验证根路径与子路径生产构建的离线核心流程
 
 涉及产品行为、持久化格式、依赖或运行边界时，先阅读 `project-context/` 中对应决策与契约。问题和需求通过 GitHub Issues 提交，具体实现讨论保留在对应 Issue 或 Pull Request 中。
 

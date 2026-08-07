@@ -80,13 +80,15 @@ const trashedLifecycleSchema = z.strictObject({
 export const taskTitleSchema = z
   .string()
   .refine((value) => value.trim().length > 0, "任务标题不能为空");
+export const taskStatusSchema = z.enum(["open", "completed"]);
+export const taskPrioritySchema = z.enum(["P0", "P1", "P2", "P3", "P4", "P5"]);
 export const taskSchema = z
   .strictObject({
     id: uuidV4Schema,
     title: taskTitleSchema,
     notes: z.string(),
-    status: z.enum(["open", "completed"]),
-    priority: z.enum(["P0", "P1", "P2", "P3", "P4", "P5"]),
+    status: taskStatusSchema,
+    priority: taskPrioritySchema,
     createdAt: utcTimeSchema,
     updatedAt: utcTimeSchema,
     lifecycle: z.discriminatedUnion("kind", [
@@ -189,20 +191,64 @@ export const taskPositionSchema = z
     }
   });
 
+const categoryNeighborSchema = z.strictObject({
+  kind: z.literal("category"),
+  categoryId: uuidV4Schema,
+  name: categoryNameSchema,
+});
+export const categoryPositionSchema = z
+  .strictObject({
+    previousCategory: z.union([
+      z.strictObject({ kind: z.literal("start") }),
+      categoryNeighborSchema,
+    ]),
+    nextCategory: z.union([
+      z.strictObject({ kind: z.literal("end") }),
+      categoryNeighborSchema,
+    ]),
+  })
+  .superRefine(({ nextCategory, previousCategory }, context) => {
+    if (
+      previousCategory.kind === "category" &&
+      nextCategory.kind === "category" &&
+      previousCategory.categoryId === nextCategory.categoryId
+    ) {
+      context.addIssue({ code: "custom", message: "分类位置两侧不能引用同一分类" });
+    }
+  });
+
+const taskSubjectSchema = z.strictObject({
+  taskId: uuidV4Schema,
+  title: taskTitleSchema,
+});
+const categorySubjectSchema = z.strictObject({
+  categoryId: uuidV4Schema,
+  name: categoryNameSchema,
+});
+const eventOrderSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const taskEventBase = {
+  subjectType: z.literal("task"),
+  subject: taskSubjectSchema,
+  occurredAt: utcTimeSchema,
+  operationSequence: operationSequenceSchema,
+  eventOrder: eventOrderSchema,
+};
+const categoryEventBase = {
+  subjectType: z.literal("category"),
+  subject: categorySubjectSchema,
+  occurredAt: utcTimeSchema,
+  operationSequence: operationSequenceSchema,
+  eventOrder: eventOrderSchema,
+};
+
 export const taskCreatedDetailsSchema = z.strictObject({
   categorySnapshot: categorySnapshotSchema,
   position: taskPositionSchema,
 });
 export const taskCreatedEventSchema = z
   .strictObject({
-    subjectType: z.literal("task"),
-    subject: z.strictObject({
-      taskId: uuidV4Schema,
-      title: taskTitleSchema,
-    }),
+    ...taskEventBase,
     eventType: z.literal("task.created"),
-    occurredAt: utcTimeSchema,
-    operationSequence: operationSequenceSchema,
     eventOrder: z.literal(0),
     details: taskCreatedDetailsSchema,
   })
@@ -213,6 +259,224 @@ export const taskCreatedEventSchema = z
       }
     }
   });
+
+const titleChangedDetailsSchema = z.strictObject({
+  categorySnapshot: categorySnapshotSchema,
+  beforeTitle: taskTitleSchema,
+});
+const notesChangedDetailsSchema = z
+  .strictObject({
+    categorySnapshot: categorySnapshotSchema,
+    beforeNotes: z.string(),
+    afterNotes: z.string(),
+  })
+  .refine(({ afterNotes, beforeNotes }) => afterNotes !== beforeNotes, {
+    message: "备注变化前后必须不同",
+  });
+const titleAndNotesChangedDetailsSchema = z
+  .strictObject({
+    categorySnapshot: categorySnapshotSchema,
+    beforeTitle: taskTitleSchema,
+    beforeNotes: z.string(),
+    afterNotes: z.string(),
+  })
+  .refine(({ afterNotes, beforeNotes }) => afterNotes !== beforeNotes, {
+    message: "备注变化前后必须不同",
+  });
+export const taskContentChangedEventSchema = z
+  .strictObject({
+    ...taskEventBase,
+    eventType: z.literal("task.content_changed"),
+    eventOrder: z.literal(0),
+    details: z.union([
+      titleChangedDetailsSchema,
+      notesChangedDetailsSchema,
+      titleAndNotesChangedDetailsSchema,
+    ]),
+  })
+  .superRefine(({ details, subject }, context) => {
+    if ("beforeTitle" in details && details.beforeTitle === subject.title) {
+      context.addIssue({ code: "custom", message: "标题变化前后必须不同" });
+    }
+  });
+
+const statusDetailsSchema = z.strictObject({
+  categorySnapshot: categorySnapshotSchema,
+});
+export const taskCompletedEventSchema = z.strictObject({
+  ...taskEventBase,
+  eventType: z.literal("task.completed"),
+  eventOrder: z.literal(0),
+  details: statusDetailsSchema,
+});
+export const taskReopenedEventSchema = z.strictObject({
+  ...taskEventBase,
+  eventType: z.literal("task.reopened"),
+  eventOrder: z.literal(0),
+  details: statusDetailsSchema,
+});
+
+const priorityDetailsSchema = z
+  .strictObject({
+    categorySnapshot: categorySnapshotSchema,
+    beforePriority: taskPrioritySchema,
+    afterPriority: taskPrioritySchema,
+  })
+  .refine(({ afterPriority, beforePriority }) => afterPriority !== beforePriority, {
+    message: "优先级变化前后必须不同",
+  });
+export const taskPriorityChangedEventSchema = z.strictObject({
+  ...taskEventBase,
+  eventType: z.literal("task.priority_changed"),
+  eventOrder: z.literal(0),
+  details: priorityDetailsSchema,
+});
+
+const taskReorderedDetailsSchema = z.strictObject({
+  categorySnapshot: categorySnapshotSchema,
+  status: taskStatusSchema,
+  beforePosition: taskPositionSchema,
+  afterPosition: taskPositionSchema,
+});
+export const taskReorderedEventSchema = z.strictObject({
+  ...taskEventBase,
+  eventType: z.literal("task.reordered"),
+  eventOrder: z.literal(0),
+  details: taskReorderedDetailsSchema,
+});
+
+const categoryPositionDetailsSchema = z.strictObject({
+  categorySnapshot: categorySnapshotSchema,
+  position: taskPositionSchema,
+});
+const categoryChangedDetailsSchema = z
+  .strictObject({
+    status: taskStatusSchema,
+    source: categoryPositionDetailsSchema,
+    target: categoryPositionDetailsSchema,
+  })
+  .refine(
+    ({ source, target }) =>
+      JSON.stringify(source.categorySnapshot.ref) !==
+      JSON.stringify(target.categorySnapshot.ref),
+    { message: "任务移动的来源和目标分类必须不同" },
+  );
+export const taskCategoryChangedEventSchema = z.strictObject({
+  ...taskEventBase,
+  eventType: z.literal("task.category_changed"),
+  details: categoryChangedDetailsSchema,
+});
+
+const movedByCategoryDeletionDetailsSchema = z.strictObject({
+  status: taskStatusSchema,
+  source: categoryPositionDetailsSchema.extend({
+    categorySnapshot: customCategorySnapshotSchema,
+  }),
+  targetPosition: taskPositionSchema,
+});
+export const taskMovedByCategoryDeletionEventSchema = z
+  .strictObject({
+    ...taskEventBase,
+    eventType: z.literal("task.moved_to_inbox_by_category_deletion"),
+    details: movedByCategoryDeletionDetailsSchema,
+  })
+  .refine(({ eventOrder }) => eventOrder > 0, {
+    message: "分类删除派生任务事件顺序必须大于零",
+  });
+
+const lifecycleEventDetailsSchema = z.strictObject({
+  categorySnapshot: categorySnapshotSchema,
+  status: taskStatusSchema,
+  position: taskPositionSchema,
+});
+export const taskTrashedEventSchema = z.strictObject({
+  ...taskEventBase,
+  eventType: z.literal("task.trashed"),
+  eventOrder: z.literal(0),
+  details: lifecycleEventDetailsSchema,
+});
+export const taskRestoredEventSchema = z.strictObject({
+  ...taskEventBase,
+  eventType: z.literal("task.restored"),
+  eventOrder: z.literal(0),
+  details: lifecycleEventDetailsSchema,
+});
+
+export const categoryCreatedEventSchema = z.strictObject({
+  ...categoryEventBase,
+  eventType: z.literal("category.created"),
+  eventOrder: z.literal(0),
+  details: z.strictObject({}),
+});
+export const categoryRenamedEventSchema = z
+  .strictObject({
+    ...categoryEventBase,
+    eventType: z.literal("category.renamed"),
+    eventOrder: z.literal(0),
+    details: z.strictObject({ beforeName: categoryNameSchema }),
+  })
+  .refine(({ details, subject }) => details.beforeName !== subject.name, {
+    message: "分类名称变化前后必须不同",
+  });
+export const categoryReorderedEventSchema = z
+  .strictObject({
+    ...categoryEventBase,
+    eventType: z.literal("category.reordered"),
+    eventOrder: z.literal(0),
+    details: z.strictObject({
+      beforePosition: categoryPositionSchema,
+      afterPosition: categoryPositionSchema,
+    }),
+  })
+  .superRefine(({ details, subject }, context) => {
+    for (const position of [details.beforePosition, details.afterPosition]) {
+      for (const neighbor of [position.previousCategory, position.nextCategory]) {
+        if (neighbor.kind === "category" && neighbor.categoryId === subject.categoryId) {
+          context.addIssue({ code: "custom", message: "分类位置不能引用主体自身" });
+        }
+      }
+    }
+  });
+export const categoryDeletedEventSchema = z.strictObject({
+  ...categoryEventBase,
+  eventType: z.literal("category.deleted"),
+  eventOrder: z.literal(0),
+  details: z.strictObject({
+    affectedTaskCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  }),
+});
+
+export const historyEventSchema = z.union([
+  taskCreatedEventSchema,
+  taskContentChangedEventSchema,
+  taskCompletedEventSchema,
+  taskReopenedEventSchema,
+  taskPriorityChangedEventSchema,
+  taskReorderedEventSchema,
+  taskCategoryChangedEventSchema,
+  taskMovedByCategoryDeletionEventSchema,
+  taskTrashedEventSchema,
+  taskRestoredEventSchema,
+  categoryCreatedEventSchema,
+  categoryRenamedEventSchema,
+  categoryReorderedEventSchema,
+  categoryDeletedEventSchema,
+]);
+
+function collectHistoryTaskReferences(value: unknown, references: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectHistoryTaskReferences(item, references);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  if (record.kind === "task" && typeof record.taskId === "string") {
+    references.push(record.taskId);
+  }
+  for (const nested of Object.values(record)) {
+    collectHistoryTaskReferences(nested, references);
+  }
+}
 
 export const activationRecordSchema = z.strictObject({
   state: z.enum(["initializing", "active"]),
@@ -233,7 +497,7 @@ export const backupDataSchema = z
     categoryOrder: z.array(uuidV4Schema),
     taskOrderByCategory: z.array(taskOrderGroupSchema),
     drafts: z.array(draftSchema),
-    history: z.array(taskCreatedEventSchema),
+    history: z.array(historyEventSchema),
   })
   .superRefine((workspace, context) => {
     const categoryIds = workspace.categories.map(({ id }) => id);
@@ -332,14 +596,13 @@ export const backupDataSchema = z
       context.addIssue({ code: "custom", message: "历史逻辑键必须唯一" });
     }
     for (const event of workspace.history) {
-      if (!taskIdSet.has(event.subject.taskId)) {
+      if (event.subjectType === "task" && !taskIdSet.has(event.subject.taskId)) {
         context.addIssue({ code: "custom", message: "历史任务主体不存在" });
       }
-      for (const neighbor of [
-        event.details.position.previousTask,
-        event.details.position.nextTask,
-      ]) {
-        if (neighbor.kind === "task" && !taskIdSet.has(neighbor.taskId)) {
+      const references: string[] = [];
+      collectHistoryTaskReferences(event.details, references);
+      for (const taskId of references) {
+        if (!taskIdSet.has(taskId)) {
           context.addIssue({ code: "custom", message: "历史邻居不存在" });
         }
       }
@@ -364,9 +627,13 @@ export type ActivationRecord = z.infer<typeof activationRecordSchema>;
 export type Category = z.infer<typeof categorySchema>;
 export type CategoryRef = z.infer<typeof categoryRefSchema>;
 export type CategorySnapshot = z.infer<typeof categorySnapshotSchema>;
+export type CategoryPosition = z.infer<typeof categoryPositionSchema>;
 export type DraftEntry = z.infer<typeof draftEntrySchema>;
 export type DraftRecord = z.infer<typeof draftSchema>;
+export type HistoryEvent = z.infer<typeof historyEventSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type TaskCreatedEvent = z.infer<typeof taskCreatedEventSchema>;
 export type TaskOrderGroup = z.infer<typeof taskOrderGroupSchema>;
 export type TaskPosition = z.infer<typeof taskPositionSchema>;
+export type TaskPriority = z.infer<typeof taskPrioritySchema>;
+export type TaskStatus = z.infer<typeof taskStatusSchema>;

@@ -35,8 +35,9 @@
     "test:unit": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:pwa": "playwright test --config playwright.pwa.config.ts",
     "build": "tsc --noEmit && vite build",
-    "check": "npm run quality && npm run typecheck && npm run test:coverage && npm run build && npm run test:e2e"
+    "check": "npm run quality && npm run typecheck && npm run test:coverage && npm run build && npm run test:e2e && npm run test:pwa"
   },
   "dependencies": {
     "idb": "8.0.3",

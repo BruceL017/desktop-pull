@@ -2,11 +2,18 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { WorkspaceProvider } from "../../src/application/workspace-controller";
+import { applyCreateIntent, freezeCreateIntent } from "../../src/domain/create-task";
+import { freezeTaskTrash } from "../../src/domain/operations";
+import { emptyWorkspace } from "../../src/domain/workspace";
+import { bootstrapDatabase } from "../../src/storage/database";
+import { WorkspaceRepository } from "../../src/storage/workspace-repository";
+import { PendingCreateNotice } from "../../src/ui/StorageNotice";
 import { TaskPage } from "../../src/ui/TaskPage";
 
 function renderPage() {
   return render(
     <WorkspaceProvider>
+      <PendingCreateNotice />
       <TaskPage />
     </WorkspaceProvider>,
   );
@@ -88,5 +95,51 @@ describe("WorkspaceProvider", () => {
     ).__DESKTOP_PULL_TEST_FAILURES__ = {};
     await user.click(screen.getByRole("button", { name: "重试草稿" }));
     await waitFor(() => expect(screen.queryByText("草稿未保存")).not.toBeInTheDocument());
+  });
+
+  it("hides expired content immediately and retries physical cleanup separately", async () => {
+    const taskId = "70000000-0000-4000-8000-000000000001";
+    const draft = {
+      entry: { kind: "global" as const },
+      generation: "70000000-0000-4000-8000-000000000002",
+      title: "Expired task",
+      cursorOffset: 12,
+    };
+    const initial = { ...emptyWorkspace(), drafts: [draft] };
+    const intent = freezeCreateIntent({
+      workspace: initial,
+      draft,
+      taskId,
+      submissionId: "70000000-0000-4000-8000-000000000003",
+      occurredAt: "2026-05-01T00:00:00.000Z",
+    });
+    const repository = new WorkspaceRepository(await bootstrapDatabase());
+    await repository.commitCreate(intent);
+    await repository.commitMutation(
+      freezeTaskTrash(applyCreateIntent(initial, intent), taskId, {
+        occurredAt: "2026-06-01T00:00:00.000Z",
+      }),
+    );
+    repository.close();
+    (
+      globalThis as { __DESKTOP_PULL_TEST_FAILURES__?: Record<string, number> }
+    ).__DESKTOP_PULL_TEST_FAILURES__ = { "mutation.beforeWrite": 20 };
+
+    const rendered = renderPage();
+    expect(await screen.findByText("到期内容清理待完成")).toBeVisible();
+    expect(screen.queryByText("Expired task")).not.toBeInTheDocument();
+
+    (
+      globalThis as { __DESKTOP_PULL_TEST_FAILURES__?: Record<string, number> }
+    ).__DESKTOP_PULL_TEST_FAILURES__ = {};
+    await userEvent.click(screen.getByRole("button", { name: "重试清理" }));
+    await waitFor(() =>
+      expect(screen.queryByText("到期内容清理待完成")).not.toBeInTheDocument(),
+    );
+    rendered.unmount();
+
+    const verified = new WorkspaceRepository(await bootstrapDatabase());
+    expect((await verified.read()).tasks).toEqual([]);
+    verified.close();
   });
 });

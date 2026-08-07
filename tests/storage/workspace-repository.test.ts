@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { freezeCreateIntent } from "../../src/domain/create-task";
+import { freezeCategoryCreate } from "../../src/domain/operations";
 import { emptyWorkspace } from "../../src/domain/workspace";
 import { bootstrapDatabase } from "../../src/storage/database";
+import { coreDatabaseName } from "../../src/storage/database-schema";
 import { WorkspaceRepository } from "../../src/storage/workspace-repository";
 
 const taskId = "10000000-0000-4000-8000-000000000001";
@@ -110,5 +112,59 @@ describe("WorkspaceRepository", () => {
     handle.control.close();
 
     await expect(bootstrapDatabase()).rejects.toThrow();
+  });
+
+  it("atomically rolls back and idempotently retries a six-store mutation", async () => {
+    (
+      globalThis as { __DESKTOP_PULL_TEST_FAILURES__?: Record<string, number> }
+    ).__DESKTOP_PULL_TEST_FAILURES__ = { "mutation.afterCategories": 1 };
+    const repository = new WorkspaceRepository(await bootstrapDatabase());
+    const mutation = freezeCategoryCreate(emptyWorkspace(), "Work", undefined, {
+      categoryId: "50000000-0000-4000-8000-000000000001",
+      occurredAt: "2026-08-05T01:02:03.004Z",
+    });
+
+    await expect(repository.commitMutation(mutation)).rejects.toThrow();
+    expect(await repository.read()).toEqual(emptyWorkspace());
+
+    await repository.commitMutation(mutation);
+    await repository.commitMutation(mutation);
+    const stored = await repository.read();
+    repository.close();
+    expect({
+      ...stored,
+      taskOrderByCategory: [...stored.taskOrderByCategory].sort((left, right) =>
+        JSON.stringify(left.categoryRef).localeCompare(JSON.stringify(right.categoryRef)),
+      ),
+    }).toEqual({
+      ...mutation.result,
+      taskOrderByCategory: [...mutation.result.taskOrderByCategory].sort((left, right) =>
+        JSON.stringify(left.categoryRef).localeCompare(JSON.stringify(right.categoryRef)),
+      ),
+    });
+  });
+
+  it("removes a provably inactive core generation before opening user data", async () => {
+    const initial = await bootstrapDatabase();
+    const activeName = coreDatabaseName(initial.activation.generation);
+    initial.core.close();
+    initial.control.close();
+    const extraName = coreDatabaseName("60000000-0000-4000-8000-000000000001");
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open(extraName, 1);
+      request.onsuccess = () => {
+        request.result.close();
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+
+    const handle = await bootstrapDatabase();
+    const coreNames = (await indexedDB.databases()).flatMap(({ name }) =>
+      name?.startsWith("desktop-pull-core-") ? [name] : [],
+    );
+    expect(coreNames).toEqual([activeName]);
+    handle.core.close();
+    handle.control.close();
   });
 });

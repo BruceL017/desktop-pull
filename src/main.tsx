@@ -6,6 +6,28 @@ import { normalizeColdStartHash } from "./router";
 
 normalizeColdStartHash();
 
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL })
+      .then(async () => {
+        const registration = await navigator.serviceWorker.ready;
+        const resources = performance
+          .getEntriesByType("resource")
+          .flatMap((entry) =>
+            entry.name.startsWith(window.location.origin) ? [entry.name] : [],
+          );
+        registration.active?.postMessage({
+          type: "cache-app-resources",
+          urls: [
+            new URL(import.meta.env.BASE_URL, window.location.origin).href,
+            ...resources,
+          ],
+        });
+      });
+  });
+}
+
 const root = document.getElementById("root");
 if (!root) throw new Error("应用根节点不存在");
 

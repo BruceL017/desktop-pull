@@ -1,32 +1,39 @@
 import { Plus, X } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useI18n } from "../application/i18n";
 import { useWorkspace } from "../application/workspace-controller";
+import type { DraftEntry } from "../domain/schemas";
+import { globalDraftEntry } from "../domain/workspace";
 import { DraftStorageNotice } from "./StorageNotice";
 
-export function QuickCreate() {
-  const { endQuickCreateSession, globalDraft, submitGlobalTask, updateGlobalDraft } =
-    useWorkspace();
+interface QuickCreateProps {
+  entry?: DraftEntry;
+  label?: string;
+  contextual?: boolean;
+}
+
+export function QuickCreate({
+  entry = globalDraftEntry,
+  label,
+  contextual = false,
+}: QuickCreateProps) {
+  const { text } = useI18n();
+  const { draftFor, endQuickCreateSession, submitDraft, updateDraft } = useWorkspace();
+  const draft = draftFor(entry);
   const [mobileOpen, setMobileOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const restoredGenerationRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (
-      globalDraft &&
-      inputRef.current &&
-      restoredGenerationRef.current !== globalDraft.generation
-    ) {
-      inputRef.current.setSelectionRange(
-        globalDraft.cursorOffset,
-        globalDraft.cursorOffset,
-      );
-      restoredGenerationRef.current = globalDraft.generation;
+    if (draft && inputRef.current && restoredGenerationRef.current !== draft.generation) {
+      inputRef.current.setSelectionRange(draft.cursorOffset, draft.cursorOffset);
+      restoredGenerationRef.current = draft.generation;
     }
-  }, [globalDraft]);
+  }, [draft]);
 
   function submit(): void {
-    if (!submitGlobalTask()) return;
+    if (!submitDraft(entry)) return;
     if (inputRef.current) inputRef.current.value = "";
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -53,39 +60,54 @@ export function QuickCreate() {
       const input = inputRef.current;
       if (!input) return;
       input.focus();
-      const offset = globalDraft?.cursorOffset ?? input.value.length;
+      const offset = draft?.cursorOffset ?? input.value.length;
       input.setSelectionRange(offset, offset);
     });
   }
 
   function closeMobile(): void {
     setMobileOpen(false);
-    endQuickCreateSession();
+    endQuickCreateSession(entry);
     inputRef.current?.blur();
   }
 
-  const value = globalDraft?.title ?? "";
+  const value = draft?.title ?? "";
+  const targetLabel = label ?? text("任务", "tasks");
+  const inputLabel = contextual
+    ? text(`在${targetLabel}添加任务`, `Add a task to ${targetLabel}`)
+    : text("快速添加任务", "Quickly add a task");
+  const submitLabel = contextual
+    ? text(`提交到${targetLabel}`, `Submit to ${targetLabel}`)
+    : text("添加任务", "Add task");
   return (
     <>
-      <div className={`quick-create-shell ${mobileOpen ? "is-mobile-open" : ""}`}>
+      <div
+        className={`quick-create-shell ${contextual ? "is-contextual" : ""} ${mobileOpen ? "is-mobile-open" : ""}`}
+      >
         <form className="quick-create" onSubmit={onSubmit}>
           <input
             ref={inputRef}
-            aria-label="快速添加任务"
+            aria-label={inputLabel}
             autoComplete="off"
             enterKeyHint="done"
             maxLength={1000}
-            placeholder="添加一项任务"
+            placeholder={
+              contextual
+                ? text(`添加到${targetLabel}`, `Add to ${targetLabel}`)
+                : text("添加一项任务", "Add a task")
+            }
             value={value}
             onChange={(event) =>
-              updateGlobalDraft(
+              updateDraft(
+                entry,
                 event.currentTarget.value,
                 event.currentTarget.selectionStart ?? event.currentTarget.value.length,
               )
             }
             onSelect={(event) => {
               if (event.currentTarget.value === "") return;
-              updateGlobalDraft(
+              updateDraft(
+                entry,
                 event.currentTarget.value,
                 event.currentTarget.selectionStart ?? event.currentTarget.value.length,
               );
@@ -102,10 +124,10 @@ export function QuickCreate() {
             <button
               className="icon-button subtle-button"
               type="button"
-              aria-label="清空草稿"
-              title="清空草稿"
+              aria-label={text("清空草稿", "Clear draft")}
+              title={text("清空草稿", "Clear draft")}
               onClick={() => {
-                updateGlobalDraft("", 0);
+                updateDraft(entry, "", 0);
                 inputRef.current?.focus();
               }}
             >
@@ -115,29 +137,39 @@ export function QuickCreate() {
           <button
             className="icon-button add-button"
             type="submit"
-            aria-label="添加任务"
-            title="添加任务"
+            aria-label={submitLabel}
+            title={submitLabel}
             disabled={value.trim().length === 0}
           >
             <Plus size={19} aria-hidden="true" />
           </button>
         </form>
-        <DraftStorageNotice />
+        {!contextual ? <DraftStorageNotice /> : null}
       </div>
 
-      <button
-        className={`mobile-create-trigger ${mobileOpen ? "is-open" : ""}`}
-        type="button"
-        aria-label={mobileOpen ? "关闭快速添加" : "打开快速添加"}
-        title={mobileOpen ? "关闭快速添加" : "打开快速添加"}
-        onClick={mobileOpen ? closeMobile : openMobile}
-      >
-        {mobileOpen ? (
-          <X size={24} aria-hidden="true" />
-        ) : (
-          <Plus size={26} aria-hidden="true" />
-        )}
-      </button>
+      {!contextual ? (
+        <button
+          className={`mobile-create-trigger ${mobileOpen ? "is-open" : ""}`}
+          type="button"
+          aria-label={
+            mobileOpen
+              ? text("关闭快速添加", "Close quick create")
+              : text("打开快速添加", "Open quick create")
+          }
+          title={
+            mobileOpen
+              ? text("关闭快速添加", "Close quick create")
+              : text("打开快速添加", "Open quick create")
+          }
+          onClick={mobileOpen ? closeMobile : openMobile}
+        >
+          {mobileOpen ? (
+            <X size={24} aria-hidden="true" />
+          ) : (
+            <Plus size={26} aria-hidden="true" />
+          )}
+        </button>
+      ) : null}
     </>
   );
 }

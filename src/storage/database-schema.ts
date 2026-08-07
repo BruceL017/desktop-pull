@@ -3,8 +3,8 @@ import type {
   ActivationRecord,
   Category,
   DraftRecord,
+  HistoryEvent,
   Task,
-  TaskCreatedEvent,
   TaskOrderGroup,
 } from "../domain/schemas";
 
@@ -39,7 +39,7 @@ export interface CoreDatabaseSchema extends DBSchema {
   };
   history: {
     key: [string, number];
-    value: TaskCreatedEvent;
+    value: HistoryEvent;
     indexes: {
       byTaskSubject: string;
       byCategorySubject: string;
@@ -59,7 +59,15 @@ export type RepositoryFailurePoint =
   | "create.afterOrder"
   | "create.afterHistory"
   | "create.afterMeta"
-  | "create.afterDraft";
+  | "create.afterDraft"
+  | "mutation.beforeWrite"
+  | "mutation.afterClear"
+  | "mutation.afterTasks"
+  | "mutation.afterCategories"
+  | "mutation.afterOrder"
+  | "mutation.afterDrafts"
+  | "mutation.afterHistory"
+  | "mutation.afterMeta";
 
 export function consumeTestFailure(point: string): void {
   if (!import.meta.env.DEV) return;
