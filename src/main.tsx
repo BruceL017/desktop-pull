@@ -3,13 +3,16 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import "./app/styles.css";
 import { normalizeColdStartHash } from "./router";
+import { APP_VERSION } from "./storage/database-schema";
 
 normalizeColdStartHash();
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     void navigator.serviceWorker
-      .register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL })
+      .register(`${import.meta.env.BASE_URL}sw.js?app-version=${APP_VERSION}`, {
+        scope: import.meta.env.BASE_URL,
+      })
       .then(async () => {
         const registration = await navigator.serviceWorker.ready;
         const resources = performance
@@ -19,12 +22,14 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
           );
         registration.active?.postMessage({
           type: "cache-app-resources",
+          version: APP_VERSION,
           urls: [
             new URL(import.meta.env.BASE_URL, window.location.origin).href,
             ...resources,
           ],
         });
-      });
+      })
+      .catch(() => undefined);
   });
 }
 

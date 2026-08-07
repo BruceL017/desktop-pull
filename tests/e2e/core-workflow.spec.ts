@@ -12,6 +12,7 @@ test("the desktop UI completes the local task lifecycle and backup round trip", 
   await quickCreate.fill("原任务");
   await quickCreate.press("Enter");
 
+  await page.getByRole("button", { name: "新建分类" }).click();
   const newCategoryForm = page.locator(".new-category-form");
   await newCategoryForm.getByRole("textbox", { name: "新分类名称" }).fill("工作");
   await newCategoryForm.getByRole("button", { name: "添加" }).click();
@@ -42,21 +43,23 @@ test("the desktop UI completes the local task lifecycle and backup round trip", 
   ).toBeVisible();
 
   await page.getByRole("button", { name: "重命名工作" }).click();
-  await page.getByRole("textbox", { name: "分类名称", exact: true }).fill("工作改名");
+  await page.getByRole("textbox", { name: "分类名称", exact: true }).fill("归档");
   await page.getByRole("button", { name: "保存" }).click();
-  await expect(page.getByRole("heading", { name: "工作改名" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "归档" })).toBeVisible();
 
   await page.getByRole("link", { name: "历史" }).click();
-  const subjectFilter = page.getByRole("combobox", { name: "筛选主体" });
-  await expect(subjectFilter.locator("option")).toContainText(["工作改名"]);
+  await page.getByRole("button", { name: "筛选", exact: true }).click();
+  await page.getByRole("textbox", { name: "搜索分类" }).fill("工作");
+  await expect(page.getByRole("button", { name: "归档" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭筛选" }).click();
   await expect(page.getByText("优先级 P3 → P1")).toBeVisible();
   await expect(page.getByText("标记为已完成")).toBeVisible();
   await expect(page.getByText("重新打开")).toBeVisible();
 
   await page.getByRole("link", { name: "任务" }).click();
   page.once("dialog", (confirmation) => confirmation.accept());
-  await page.getByRole("button", { name: "删除工作改名" }).click();
-  await expect(page.getByRole("heading", { name: "工作改名" })).toHaveCount(0);
+  await page.getByRole("button", { name: "删除归档" }).click();
+  await expect(page.getByRole("heading", { name: "归档" })).toHaveCount(0);
   await expect(
     page
       .locator(".category-section")

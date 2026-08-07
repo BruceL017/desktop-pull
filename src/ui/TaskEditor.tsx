@@ -1,5 +1,12 @@
 import { Archive, Check, History, Plus, Trash2, X } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useI18n } from "../application/i18n";
 import { useWorkspace } from "../application/workspace-controller";
 import type { CategoryRef, Task, TaskPriority } from "../domain/schemas";
@@ -37,6 +44,7 @@ export function TaskEditor({ task, workspace, onClose, onShowHistory }: TaskEdit
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const categoryInputRef = useRef<HTMLInputElement>(null);
+  const categoryComposingRef = useRef(false);
 
   const save = useCallback((): boolean => {
     clearTimeout(timerRef.current);
@@ -107,6 +115,15 @@ export function TaskEditor({ task, workspace, onClose, onShowHistory }: TaskEdit
     } catch (cause) {
       setCategoryError(errorText(cause, "无法创建分类", "Unable to create category"));
       requestAnimationFrame(() => categoryInputRef.current?.focus());
+    }
+  }
+
+  function preventComposingSubmit(event: KeyboardEvent<HTMLInputElement>): void {
+    if (
+      event.key === "Enter" &&
+      (categoryComposingRef.current || event.nativeEvent.isComposing)
+    ) {
+      event.preventDefault();
     }
   }
 
@@ -220,9 +237,23 @@ export function TaskEditor({ task, workspace, onClose, onShowHistory }: TaskEdit
                 aria-label={text("新分类名称", "New category name")}
                 value={newCategoryName}
                 onChange={(event) => setNewCategoryName(event.currentTarget.value)}
+                onCompositionStart={() => {
+                  categoryComposingRef.current = true;
+                }}
+                onCompositionEnd={() => {
+                  categoryComposingRef.current = false;
+                }}
+                onKeyDown={preventComposingSubmit}
               />
               <div>
-                <button type="button" onClick={() => setAddingCategory(false)}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddingCategory(false);
+                    setNewCategoryName("");
+                    setCategoryError("");
+                  }}
+                >
                   {text("取消", "Cancel")}
                 </button>
                 <button type="submit" disabled={newCategoryName.trim().length === 0}>

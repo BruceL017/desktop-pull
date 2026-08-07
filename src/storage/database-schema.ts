@@ -10,8 +10,8 @@ import type {
 
 export const CONTROL_DATABASE_NAME = "desktop-pull-control";
 export const CONTROL_DATABASE_VERSION = 1;
-export const CORE_DATABASE_VERSION = 1;
-export const APP_VERSION = "0.1.0";
+export const CORE_DATABASE_VERSION = 2;
+export const APP_VERSION = "0.2.0";
 
 export interface ControlDatabaseSchema extends DBSchema {
   activation: {
@@ -46,8 +46,8 @@ export interface CoreDatabaseSchema extends DBSchema {
     };
   };
   meta: {
-    key: "categoryOrder" | "nextOperationSequence";
-    value: string[] | string;
+    key: "categoryOrder" | "nextOperationSequence" | "schemaVersion";
+    value: string[] | string | number;
   };
 }
 

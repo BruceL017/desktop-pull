@@ -19,6 +19,15 @@ export function BackupPage() {
     setCandidate(null);
     setError("");
     if (!file) return;
+    if (state.cleanupPending) {
+      setError(
+        text(
+          "永久清理尚未完成，暂时不能读取备份文件。",
+          "Permanent cleanup is pending. Backup files cannot be read yet.",
+        ),
+      );
+      return;
+    }
     try {
       const parsed = parseBackup(JSON.parse(await file.text()));
       setCandidate(parsed);
@@ -75,10 +84,15 @@ export function BackupPage() {
             </p>
           </div>
         </div>
-        <label className="file-picker">
+        <label className={`file-picker${state.cleanupPending ? " is-disabled" : ""}`}>
           <FileJson size={17} aria-hidden="true" />
           {text("选择 JSON 文件", "Choose JSON file")}
-          <input type="file" accept="application/json,.json" onChange={selectFile} />
+          <input
+            type="file"
+            accept="application/json,.json"
+            disabled={state.cleanupPending}
+            onChange={selectFile}
+          />
         </label>
         {error ? <p className="field-error">{error}</p> : null}
         {candidate ? (
@@ -105,8 +119,17 @@ export function BackupPage() {
             <button
               className="danger-command"
               type="button"
-              disabled={state.pendingCount > 0 || state.degraded}
+              disabled={state.pendingCount > 0 || state.degraded || state.cleanupPending}
               onClick={() => {
+                if (state.pendingCount > 0 || state.degraded || state.cleanupPending) {
+                  setError(
+                    text(
+                      "当前数据尚未处于可安全导入状态，请完成待保存或清理工作后重试。",
+                      "Data is not ready for a safe import. Finish pending saves or cleanup and try again.",
+                    ),
+                  );
+                  return;
+                }
                 exportBackup();
                 if (
                   !window.confirm(

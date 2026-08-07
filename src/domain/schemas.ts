@@ -191,6 +191,23 @@ export const taskPositionSchema = z
     }
   });
 
+type ParsedTaskPosition = z.infer<typeof taskPositionSchema>;
+
+function taskIdsInPositions(positions: ParsedTaskPosition[]): string[] {
+  return positions.flatMap((position) =>
+    [position.previousTask, position.nextTask].flatMap((neighbor) =>
+      neighbor.kind === "task" ? [neighbor.taskId] : [],
+    ),
+  );
+}
+
+function positionContainsUnavailable(position: ParsedTaskPosition): boolean {
+  return (
+    position.previousTask.kind === "unavailable" ||
+    position.nextTask.kind === "unavailable"
+  );
+}
+
 const categoryNeighborSchema = z.strictObject({
   kind: z.literal("category"),
   categoryId: uuidV4Schema,
@@ -338,12 +355,25 @@ const taskReorderedDetailsSchema = z.strictObject({
   beforePosition: taskPositionSchema,
   afterPosition: taskPositionSchema,
 });
-export const taskReorderedEventSchema = z.strictObject({
-  ...taskEventBase,
-  eventType: z.literal("task.reordered"),
-  eventOrder: z.literal(0),
-  details: taskReorderedDetailsSchema,
-});
+export const taskReorderedEventSchema = z
+  .strictObject({
+    ...taskEventBase,
+    eventType: z.literal("task.reordered"),
+    eventOrder: z.literal(0),
+    details: taskReorderedDetailsSchema,
+  })
+  .superRefine(({ details, subject }, context) => {
+    const positions = [details.beforePosition, details.afterPosition];
+    if (taskIdsInPositions(positions).includes(subject.taskId)) {
+      context.addIssue({ code: "custom", message: "任务顺序位置不能引用主体自身" });
+    }
+    if (
+      !positions.some(positionContainsUnavailable) &&
+      JSON.stringify(details.beforePosition) === JSON.stringify(details.afterPosition)
+    ) {
+      context.addIssue({ code: "custom", message: "任务顺序变化前后必须不同" });
+    }
+  });
 
 const categoryPositionDetailsSchema = z.strictObject({
   categorySnapshot: categorySnapshotSchema,
@@ -361,11 +391,22 @@ const categoryChangedDetailsSchema = z
       JSON.stringify(target.categorySnapshot.ref),
     { message: "任务移动的来源和目标分类必须不同" },
   );
-export const taskCategoryChangedEventSchema = z.strictObject({
-  ...taskEventBase,
-  eventType: z.literal("task.category_changed"),
-  details: categoryChangedDetailsSchema,
-});
+export const taskCategoryChangedEventSchema = z
+  .strictObject({
+    ...taskEventBase,
+    eventType: z.literal("task.category_changed"),
+    details: categoryChangedDetailsSchema,
+  })
+  .superRefine(({ details, subject }, context) => {
+    const sourceIds = taskIdsInPositions([details.source.position]);
+    const targetIds = taskIdsInPositions([details.target.position]);
+    if ([...sourceIds, ...targetIds].includes(subject.taskId)) {
+      context.addIssue({ code: "custom", message: "任务分类位置不能引用主体自身" });
+    }
+    if (sourceIds.some((taskId) => targetIds.includes(taskId))) {
+      context.addIssue({ code: "custom", message: "跨分类位置不能重复引用同一邻居" });
+    }
+  });
 
 const movedByCategoryDeletionDetailsSchema = z.strictObject({
   status: taskStatusSchema,
@@ -382,6 +423,15 @@ export const taskMovedByCategoryDeletionEventSchema = z
   })
   .refine(({ eventOrder }) => eventOrder > 0, {
     message: "分类删除派生任务事件顺序必须大于零",
+  })
+  .superRefine(({ details, subject }, context) => {
+    if (
+      taskIdsInPositions([details.source.position, details.targetPosition]).includes(
+        subject.taskId,
+      )
+    ) {
+      context.addIssue({ code: "custom", message: "分类删除移动位置不能引用主体自身" });
+    }
   });
 
 const lifecycleEventDetailsSchema = z.strictObject({
@@ -389,18 +439,30 @@ const lifecycleEventDetailsSchema = z.strictObject({
   status: taskStatusSchema,
   position: taskPositionSchema,
 });
-export const taskTrashedEventSchema = z.strictObject({
-  ...taskEventBase,
-  eventType: z.literal("task.trashed"),
-  eventOrder: z.literal(0),
-  details: lifecycleEventDetailsSchema,
-});
-export const taskRestoredEventSchema = z.strictObject({
-  ...taskEventBase,
-  eventType: z.literal("task.restored"),
-  eventOrder: z.literal(0),
-  details: lifecycleEventDetailsSchema,
-});
+export const taskTrashedEventSchema = z
+  .strictObject({
+    ...taskEventBase,
+    eventType: z.literal("task.trashed"),
+    eventOrder: z.literal(0),
+    details: lifecycleEventDetailsSchema,
+  })
+  .superRefine(({ details, subject }, context) => {
+    if (taskIdsInPositions([details.position]).includes(subject.taskId)) {
+      context.addIssue({ code: "custom", message: "删除位置不能引用任务自身" });
+    }
+  });
+export const taskRestoredEventSchema = z
+  .strictObject({
+    ...taskEventBase,
+    eventType: z.literal("task.restored"),
+    eventOrder: z.literal(0),
+    details: lifecycleEventDetailsSchema,
+  })
+  .superRefine(({ details, subject }, context) => {
+    if (taskIdsInPositions([details.position]).includes(subject.taskId)) {
+      context.addIssue({ code: "custom", message: "恢复位置不能引用任务自身" });
+    }
+  });
 
 export const categoryCreatedEventSchema = z.strictObject({
   ...categoryEventBase,
@@ -435,6 +497,11 @@ export const categoryReorderedEventSchema = z
           context.addIssue({ code: "custom", message: "分类位置不能引用主体自身" });
         }
       }
+    }
+    if (
+      JSON.stringify(details.beforePosition) === JSON.stringify(details.afterPosition)
+    ) {
+      context.addIssue({ code: "custom", message: "分类顺序变化前后必须不同" });
     }
   });
 export const categoryDeletedEventSchema = z.strictObject({
@@ -478,12 +545,21 @@ function collectHistoryTaskReferences(value: unknown, references: string[]): voi
   }
 }
 
-export const activationRecordSchema = z.strictObject({
-  state: z.enum(["initializing", "active"]),
-  generation: uuidV4Schema,
-  schemaVersion: z.literal(1),
-  compatibleAppVersion: z.literal("0.1.0"),
-});
+export const activationRecordSchema = z
+  .strictObject({
+    state: z.enum(["initializing", "active"]),
+    generation: uuidV4Schema,
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
+    compatibleAppVersion: z.union([z.literal("0.1.0"), z.literal("0.2.0")]),
+  })
+  .superRefine(({ compatibleAppVersion, schemaVersion }, context) => {
+    if (
+      (schemaVersion === 1 && compatibleAppVersion !== "0.1.0") ||
+      (schemaVersion === 2 && compatibleAppVersion !== "0.2.0")
+    ) {
+      context.addIssue({ code: "custom", message: "数据库与应用版本不兼容" });
+    }
+  });
 
 export const workspaceMetaSchema = z.strictObject({
   nextOperationSequence: operationSequenceSchema,
@@ -612,13 +688,76 @@ export const backupDataSchema = z
         context.addIssue({ code: "custom", message: "下一操作顺序未推进" });
       }
     }
+
+    const eventsByOperation = new Map<string, HistoryEvent[]>();
+    for (const event of workspace.history) {
+      const events = eventsByOperation.get(event.operationSequence) ?? [];
+      events.push(event);
+      eventsByOperation.set(event.operationSequence, events);
+    }
+    for (const events of eventsByOperation.values()) {
+      const ordered = [...events].sort(
+        (left, right) => left.eventOrder - right.eventOrder,
+      );
+      if (new Set(ordered.map(({ occurredAt }) => occurredAt)).size !== 1) {
+        context.addIssue({ code: "custom", message: "同一操作的事件时间必须一致" });
+      }
+      const base = ordered.find(({ eventOrder }) => eventOrder === 0);
+      if (!base) {
+        context.addIssue({ code: "custom", message: "历史操作缺少主事件" });
+        continue;
+      }
+
+      if (base.eventType === "category.created") {
+        if (ordered.length === 1) continue;
+        const derived = ordered[1];
+        if (
+          ordered.length !== 2 ||
+          derived?.eventOrder !== 1 ||
+          derived.eventType !== "task.category_changed" ||
+          derived.details.target.categorySnapshot.ref.kind !== "custom" ||
+          derived.details.target.categorySnapshot.ref.categoryId !==
+            base.subject.categoryId ||
+          !("name" in derived.details.target.categorySnapshot) ||
+          derived.details.target.categorySnapshot.name !== base.subject.name
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "分类创建操作的派生任务事件不匹配",
+          });
+        }
+        continue;
+      }
+
+      if (base.eventType === "category.deleted") {
+        for (const derived of ordered.slice(1)) {
+          if (
+            derived.eventType !== "task.moved_to_inbox_by_category_deletion" ||
+            derived.eventOrder > base.details.affectedTaskCount ||
+            derived.details.source.categorySnapshot.ref.categoryId !==
+              base.subject.categoryId ||
+            derived.details.source.categorySnapshot.name !== base.subject.name
+          ) {
+            context.addIssue({
+              code: "custom",
+              message: "分类删除操作的派生任务事件不匹配",
+            });
+          }
+        }
+        continue;
+      }
+
+      if (ordered.length !== 1) {
+        context.addIssue({ code: "custom", message: "普通历史操作只能包含一个事件" });
+      }
+    }
   });
 
 export const backupEnvelopeSchema = z.strictObject({
   format: z.literal("desktop-pull-backup"),
   formatVersion: z.literal(1),
   schemaVersion: z.literal(1),
-  appVersion: z.literal("0.1.0"),
+  appVersion: z.union([z.literal("0.1.0"), z.literal("0.2.0")]),
   exportedAt: utcTimeSchema,
   data: backupDataSchema,
 });
