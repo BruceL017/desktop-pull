@@ -2,7 +2,7 @@ import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import {
   type DragEvent,
   type FormEvent,
-  type PointerEvent,
+  type KeyboardEvent,
   useEffect,
   useRef,
   useState,
@@ -11,6 +11,7 @@ import { useI18n } from "../application/i18n";
 import { useWorkspace } from "../application/workspace-controller";
 import type { CategoryRef, Task, TaskPriority, TaskStatus } from "../domain/schemas";
 import { categoryRefKey, taskMap, type WorkspaceSnapshot } from "../domain/workspace";
+import { useDirectPointerDrag, useEdgeAutoScroll } from "./use-direct-drag";
 
 const dragType = "application/x-desktop-pull-task";
 const dragHoverEvent = "desktop-pull-task-drag-hover";
@@ -21,13 +22,18 @@ interface TaskListProps {
   categoryRef: CategoryRef;
   status: TaskStatus;
   highlightedTaskId?: string;
+  activeTaskStatus: TaskStatus | null;
   onOpen(taskId: string): void;
   onMoved(taskId: string, title: string): void;
+  onDragSessionChange(status: TaskStatus | null): void;
+  onDragCommitted(categoryRef: CategoryRef, status: TaskStatus): void;
 }
 
 interface DragPayload {
   taskId: string;
   status: TaskStatus;
+  sourceCategoryKey: string;
+  sourceIndex: number;
 }
 
 function orderedTasks(
@@ -58,8 +64,11 @@ export function TaskList({
   categoryRef,
   status,
   highlightedTaskId,
+  activeTaskStatus,
   onOpen,
   onMoved,
+  onDragSessionChange,
+  onDragCommitted,
 }: TaskListProps) {
   const { createCategory, moveTask, setTaskPriority, setTaskStatus, trashTask } =
     useWorkspace();
@@ -71,15 +80,8 @@ export function TaskList({
   const [newCategoryName, setNewCategoryName] = useState("");
   const [categoryError, setCategoryError] = useState("");
   const categoryInputRef = useRef<HTMLInputElement>(null);
-  const pointerRef = useRef<{
-    taskId: string;
-    status: TaskStatus;
-    startX: number;
-    startY: number;
-    active: boolean;
-    timer: ReturnType<typeof setTimeout>;
-  } | null>(null);
-  const suppressClickRef = useRef(false);
+  const categoryComposingRef = useRef(false);
+  const nativeDragRef = useRef<DragPayload | null>(null);
 
   useEffect(() => {
     const handleHover = (event: Event) => {
@@ -125,121 +127,160 @@ export function TaskList({
     }
   }
 
-  function performDrop(payload: DragPayload, element: Element): void {
-    if (payload.status !== element.getAttribute("data-drop-status")) return;
-    const index = Number(element.getAttribute("data-drop-index"));
-    if (!Number.isInteger(index)) return;
-    moveTask(payload.taskId, dropCategory(element), index);
+  function adjustedDropIndex(payload: DragPayload, target: CategoryRef, index: number) {
+    if (
+      payload.sourceCategoryKey === categoryRefKey(target) &&
+      index > payload.sourceIndex
+    ) {
+      return index - 1;
+    }
+    return index;
   }
 
-  function dragStart(event: DragEvent, task: Task): void {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(
-      dragType,
-      JSON.stringify({ taskId: task.id, status: task.status }),
+  function performDrop(payload: DragPayload, element: Element): boolean {
+    if (payload.status !== element.getAttribute("data-drop-status")) return false;
+    const index = Number(element.getAttribute("data-drop-index"));
+    if (!Number.isInteger(index)) return false;
+    const target = dropCategory(element);
+    const moved = moveTask(
+      payload.taskId,
+      target,
+      adjustedDropIndex(payload, target, index),
+    );
+    if (moved) onDragCommitted(target, payload.status);
+    return moved;
+  }
+
+  function notifyHover(payload: DragPayload, x: number, y: number): void {
+    const element = document.elementFromPoint(x, y);
+    const categoryKey = element
+      ?.closest<HTMLElement>("[data-category-key]")
+      ?.getAttribute("data-category-key");
+    const completedCategoryKey = element
+      ?.closest<HTMLElement>("[data-completed-hover-category]")
+      ?.getAttribute("data-completed-hover-category");
+    const dropTarget = element?.closest<HTMLElement>("[data-drop-category]");
+    window.dispatchEvent(
+      new CustomEvent(dragHoverEvent, {
+        detail: {
+          categoryKey: categoryKey ?? null,
+          completedCategoryKey: completedCategoryKey ?? null,
+          dragStatus: payload.status,
+          status: dropTarget?.getAttribute("data-drop-status") ?? undefined,
+          index: Number(dropTarget?.getAttribute("data-drop-index")),
+        },
+      }),
     );
   }
 
+  const nativeAutoScroll = useEdgeAutoScroll((x, y) => {
+    const payload = nativeDragRef.current;
+    if (payload) notifyHover(payload, x, y);
+  });
+
+  function dragStart(event: DragEvent, task: Task, sourceIndex: number): void {
+    const payload: DragPayload = {
+      taskId: task.id,
+      status: task.status,
+      sourceCategoryKey: categoryRefKey(categoryRef),
+      sourceIndex,
+    };
+    nativeDragRef.current = payload;
+    onDragSessionChange(task.status);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(dragType, JSON.stringify(payload));
+  }
+
+  function dragMove(event: DragEvent): void {
+    const payload = nativeDragRef.current;
+    if (!payload) return;
+    notifyHover(payload, event.clientX, event.clientY);
+    nativeAutoScroll.update(event.clientX, event.clientY);
+  }
+
   function endDragHover(): void {
+    nativeAutoScroll.stop();
+    nativeDragRef.current = null;
+    onDragSessionChange(null);
+    setDropIndex(null);
     window.dispatchEvent(
-      new CustomEvent(dragHoverEvent, { detail: { categoryKey: null } }),
+      new CustomEvent(dragHoverEvent, {
+        detail: { categoryKey: null, completedCategoryKey: null },
+      }),
     );
   }
 
   function allowDrop(event: DragEvent, index: number): void {
-    const payload = event.dataTransfer.types.includes(dragType);
-    if (payload) {
+    if (event.dataTransfer.types.includes(dragType) && activeTaskStatus === status) {
       event.preventDefault();
       setDropIndex(index);
+    } else {
+      setDropIndex(null);
     }
   }
 
   function drop(event: DragEvent, index: number): void {
     event.preventDefault();
     const raw = event.dataTransfer.getData(dragType);
-    if (!raw) return;
-    const payload = JSON.parse(raw) as DragPayload;
-    if (payload.status !== status) return;
-    setDropIndex(null);
-    moveTask(payload.taskId, categoryRef, index);
-  }
-
-  function pointerDown(event: PointerEvent, task: Task): void {
-    if (event.pointerType === "mouse") return;
-    const timer = setTimeout(() => {
-      const current = pointerRef.current;
-      if (!current || current.taskId !== task.id) return;
-      current.active = true;
-      suppressClickRef.current = true;
-      setTouchDragging(task.id);
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }, 200);
-    pointerRef.current = {
-      taskId: task.id,
-      status: task.status,
-      startX: event.clientX,
-      startY: event.clientY,
-      active: false,
-      timer,
-    };
-  }
-
-  function pointerMove(event: PointerEvent): void {
-    const current = pointerRef.current;
-    if (!current) return;
-    const distance = Math.hypot(
-      event.clientX - current.startX,
-      event.clientY - current.startY,
-    );
-    if (!current.active && distance > 8) {
-      clearTimeout(current.timer);
-      pointerRef.current = null;
+    if (!raw) {
+      setDropIndex(null);
       return;
     }
-    if (current.active) {
-      event.preventDefault();
-      const element = document.elementFromPoint(event.clientX, event.clientY);
-      const categoryKey = element
-        ?.closest<HTMLElement>("[data-category-key]")
-        ?.getAttribute("data-category-key");
-      const dropTarget = element?.closest<HTMLElement>("[data-drop-category]");
-      window.dispatchEvent(
-        new CustomEvent(dragHoverEvent, {
-          detail: {
-            categoryKey: categoryKey ?? null,
-            status: dropTarget?.getAttribute("data-drop-status") ?? undefined,
-            index: Number(dropTarget?.getAttribute("data-drop-index")),
-          },
-        }),
-      );
+    const payload = JSON.parse(raw) as DragPayload;
+    if (payload.status !== status) {
+      setDropIndex(null);
+      return;
+    }
+    setDropIndex(null);
+    if (
+      moveTask(
+        payload.taskId,
+        categoryRef,
+        adjustedDropIndex(payload, categoryRef, index),
+      )
+    ) {
+      onDragCommitted(categoryRef, payload.status);
     }
   }
 
-  function pointerEnd(event: PointerEvent): void {
-    const current = pointerRef.current;
-    if (!current) return;
-    clearTimeout(current.timer);
-    if (current.active) {
-      event.preventDefault();
-      const target = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest("[data-drop-category]");
-      if (target) performDrop(current, target);
+  const pointerDrag = useDirectPointerDrag<DragPayload>({
+    onStart: (payload) => {
+      setTouchDragging(payload.taskId);
+      onDragSessionChange(payload.status);
+    },
+    onHover: notifyHover,
+    onDrop: (payload, x, y) => {
+      const target = document.elementFromPoint(x, y)?.closest("[data-drop-category]");
+      if (target) performDrop(payload, target);
       setTouchDragging(null);
-      requestAnimationFrame(() => {
-        suppressClickRef.current = false;
-      });
+      endDragHover();
+    },
+    onCancel: () => {
+      setTouchDragging(null);
+      endDragHover();
+    },
+  });
+
+  useEffect(() => {
+    window.addEventListener("blur", pointerDrag.abort);
+    return () => window.removeEventListener("blur", pointerDrag.abort);
+  }, [pointerDrag.abort]);
+
+  function preventComposingSubmit(event: KeyboardEvent<HTMLInputElement>): void {
+    if (
+      event.key === "Enter" &&
+      (categoryComposingRef.current || event.nativeEvent.isComposing)
+    ) {
+      event.preventDefault();
     }
-    endDragHover();
-    pointerRef.current = null;
   }
 
   if (tasks.length === 0) {
-    return status === "open" ? (
+    return (
       <button
         type="button"
         tabIndex={-1}
-        className="empty-list drop-zone"
+        className={`empty-list drop-zone ${dropIndex === 0 ? "is-drop-target" : ""}`}
         aria-label={text(
           "空任务列表，可将任务拖到这里",
           "Empty task list; tasks can be dropped here",
@@ -252,9 +293,11 @@ export function TaskList({
         onDragOver={(event) => allowDrop(event, 0)}
         onDrop={(event) => drop(event, 0)}
       >
-        {text("这里还没有任务", "No tasks here yet")}
+        {status === "open"
+          ? text("这里还没有任务", "No tasks here yet")
+          : text("这里还没有已完成任务", "No completed tasks here yet")}
       </button>
-    ) : null;
+    );
   }
 
   return (
@@ -271,6 +314,13 @@ export function TaskList({
           className={`task-row ${touchDragging === task.id ? "is-dragging" : ""} ${highlightedTaskId === task.id ? "is-highlighted" : ""} ${dropIndex === index ? "is-drop-target" : ""}`}
           key={task.id}
           data-task-id={task.id}
+          data-drop-category={
+            categoryRef.kind === "inbox" ? "inbox" : categoryRef.categoryId
+          }
+          data-drop-status={status}
+          data-drop-index={index}
+          onDragOver={(event) => allowDrop(event, index)}
+          onDrop={(event) => drop(event, index)}
         >
           <input
             className="task-checkbox"
@@ -289,21 +339,29 @@ export function TaskList({
             className="task-copy"
             type="button"
             draggable
-            data-drop-category={
-              categoryRef.kind === "inbox" ? "inbox" : categoryRef.categoryId
-            }
-            data-drop-status={status}
-            data-drop-index={index}
-            onDragStart={(event) => dragStart(event, task)}
+            onDragStart={(event) => dragStart(event, task, index)}
+            onDrag={dragMove}
             onDragEnd={endDragHover}
-            onDragOver={(event) => allowDrop(event, index)}
-            onDrop={(event) => drop(event, index)}
-            onPointerDown={(event) => pointerDown(event, task)}
-            onPointerMove={pointerMove}
-            onPointerUp={pointerEnd}
-            onPointerCancel={pointerEnd}
+            onPointerDown={(event) =>
+              pointerDrag.start(
+                event,
+                {
+                  taskId: task.id,
+                  status: task.status,
+                  sourceCategoryKey: categoryRefKey(categoryRef),
+                  sourceIndex: index,
+                },
+                task.title,
+              )
+            }
+            onPointerMove={pointerDrag.move}
+            onPointerUp={pointerDrag.end}
+            onPointerCancel={pointerDrag.cancel}
+            onContextMenu={(event) => {
+              if (pointerDrag.isDragging) event.preventDefault();
+            }}
             onClick={() => {
-              if (!suppressClickRef.current) onOpen(task.id);
+              if (!pointerDrag.suppressesClick()) onOpen(task.id);
             }}
           >
             <span className="task-title" data-testid="task-title">
@@ -376,9 +434,23 @@ export function TaskList({
                     aria-label={text("新分类名称", "New category name")}
                     value={newCategoryName}
                     onChange={(event) => setNewCategoryName(event.currentTarget.value)}
+                    onCompositionStart={() => {
+                      categoryComposingRef.current = true;
+                    }}
+                    onCompositionEnd={() => {
+                      categoryComposingRef.current = false;
+                    }}
+                    onKeyDown={preventComposingSubmit}
                   />
                   <div>
-                    <button type="button" onClick={() => setCreatingForTaskId(null)}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCreatingForTaskId(null);
+                        setNewCategoryName("");
+                        setCategoryError("");
+                      }}
+                    >
                       {text("取消", "Cancel")}
                     </button>
                     <button type="submit" disabled={newCategoryName.trim().length === 0}>
@@ -433,6 +505,16 @@ export function TaskList({
           onDrop={(event) => drop(event, tasks.length)}
         />
       </li>
+      {pointerDrag.preview ? (
+        <li
+          className="drag-preview"
+          style={{
+            transform: `translate(${pointerDrag.preview.x + 12}px, ${pointerDrag.preview.y + 12}px)`,
+          }}
+        >
+          {pointerDrag.preview.label}
+        </li>
+      ) : null}
     </ul>
   );
 }

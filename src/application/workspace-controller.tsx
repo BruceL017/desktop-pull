@@ -686,8 +686,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (workspaceRef.current) downloadBackup(workspaceRef.current);
       },
       importWorkspace: async (workspace) => {
-        if (queueRef.current.length > 0 || degradedRef.current) {
-          throw new Error("存在尚未安全保存的变更，暂时不能导入");
+        if (
+          cleanupPendingRef.current ||
+          cleanupRunningRef.current ||
+          queueRef.current.length > 0 ||
+          degradedRef.current
+        ) {
+          return false;
         }
         const parsed = backupDataSchema.parse(workspace);
         const cleanup = freezeExpiredCleanup(parsed);

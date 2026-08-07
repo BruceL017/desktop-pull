@@ -1,47 +1,60 @@
-import { Filter, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Filter, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useI18n } from "../application/i18n";
 import { useWorkspace } from "../application/workspace-controller";
 import type { CategorySnapshot, HistoryEvent, TaskPosition } from "../domain/schemas";
 
 type ActionGroup =
-  | "all"
   | "create"
   | "content"
   | "status"
   | "priority"
   | "move"
-  | "lifecycle"
+  | "delete"
+  | "restore"
   | "category";
 type Text = (chinese: string, english: string) => string;
 
 const actionGroups: ActionGroup[] = [
-  "all",
   "create",
   "content",
   "status",
   "priority",
   "move",
-  "lifecycle",
+  "delete",
+  "restore",
   "category",
 ];
 
+interface HistoryFilters {
+  taskId: string | null;
+  categoryId: string | null;
+  actions: ActionGroup[];
+}
+
+const emptyFilters: HistoryFilters = {
+  taskId: null,
+  categoryId: null,
+  actions: [],
+};
+let sessionFilters: HistoryFilters = emptyFilters;
+
 function actionGroupLabel(group: ActionGroup, text: Text): string {
   const labels: Record<ActionGroup, [string, string]> = {
-    all: ["全部动作", "All actions"],
     create: ["创建", "Created"],
-    content: ["内容", "Content"],
+    content: ["内容编辑", "Content editing"],
     status: ["完成状态", "Completion"],
     priority: ["优先级", "Priority"],
-    move: ["移动与排序", "Moves and order"],
-    lifecycle: ["删除与恢复", "Trash and restore"],
+    move: ["移动与归类", "Moves and categories"],
+    delete: ["删除", "Deletion"],
+    restore: ["恢复", "Restore"],
     category: ["分类管理", "Category management"],
   };
   return text(...labels[group]);
 }
 
-function actionGroup(event: HistoryEvent): Exclude<ActionGroup, "all"> {
+function actionGroup(event: HistoryEvent): ActionGroup {
   if (event.eventType === "task.created") return "create";
   if (event.eventType === "task.content_changed") return "content";
   if (event.eventType === "task.completed" || event.eventType === "task.reopened") {
@@ -55,9 +68,8 @@ function actionGroup(event: HistoryEvent): Exclude<ActionGroup, "all"> {
   ) {
     return "move";
   }
-  if (event.eventType === "task.trashed" || event.eventType === "task.restored") {
-    return "lifecycle";
-  }
+  if (event.eventType === "task.trashed") return "delete";
+  if (event.eventType === "task.restored") return "restore";
   return "category";
 }
 
@@ -111,6 +123,44 @@ function statusName(status: "open" | "completed", text: Text): string {
   return status === "open" ? text("未完成", "Open") : text("已完成", "Completed");
 }
 
+function taskPlacement(position: TaskPosition, text: Text): string | null {
+  const { nextTask, previousTask } = position;
+  if (previousTask.kind === "start" && nextTask.kind === "end") return null;
+  if (previousTask.kind === "start") return text("顶部", "the top");
+  if (nextTask.kind === "end") return text("末尾", "the end");
+  if (previousTask.kind === "task") {
+    return text(`「${previousTask.title}」之后`, `after “${previousTask.title}”`);
+  }
+  return null;
+}
+
+function categoryPlacement(
+  position: {
+    previousCategory:
+      | { kind: "start" }
+      | { kind: "category"; categoryId: string; name: string };
+    nextCategory:
+      | { kind: "end" }
+      | { kind: "category"; categoryId: string; name: string };
+  },
+  text: Text,
+): string {
+  if (position.previousCategory.kind === "start") {
+    return text("移到分类顶部", "Moved to the top of categories");
+  }
+  if (position.nextCategory.kind === "end") {
+    return text("移到分类末尾", "Moved to the end of categories");
+  }
+  return text(
+    `移到「${position.previousCategory.name}」之后`,
+    `Moved after “${position.previousCategory.name}”`,
+  );
+}
+
+function countTasks(count: number, text: Text): string {
+  return text(`${count} 个任务`, count === 1 ? "1 task" : `${count} tasks`);
+}
+
 function eventSummary(event: HistoryEvent, text: Text): string {
   switch (event.eventType) {
     case "task.created":
@@ -134,45 +184,84 @@ function eventSummary(event: HistoryEvent, text: Text): string {
         `优先级 ${event.details.beforePriority} → ${event.details.afterPriority}`,
         `Priority ${event.details.beforePriority} → ${event.details.afterPriority}`,
       );
-    case "task.reordered":
-      return text(
-        `调整了${categoryName(event.details.categorySnapshot, text)}内的顺序`,
-        `Reordered within ${categoryName(event.details.categorySnapshot, text)}`,
-      );
-    case "task.category_changed":
-      return text(
-        `从${categoryName(event.details.source.categorySnapshot, text)}移到${categoryName(event.details.target.categorySnapshot, text)}`,
-        `Moved from ${categoryName(event.details.source.categorySnapshot, text)} to ${categoryName(event.details.target.categorySnapshot, text)}`,
-      );
-    case "task.moved_to_inbox_by_category_deletion":
-      return text(
-        `因删除${categoryName(event.details.source.categorySnapshot, text)}移到收件箱`,
-        `Moved to Inbox when ${categoryName(event.details.source.categorySnapshot, text)} was deleted`,
-      );
+    case "task.reordered": {
+      const category = categoryName(event.details.categorySnapshot, text);
+      const status = statusName(event.details.status, text);
+      const placement = taskPlacement(event.details.afterPosition, text);
+      return placement
+        ? text(
+            `在「${category}」的${status}区移到${placement}`,
+            `Moved to ${placement} in ${status} · ${category}`,
+          )
+        : text(
+            `调整「${category}」的${status}区顺序`,
+            `Reordered ${status} · ${category}`,
+          );
+    }
+    case "task.category_changed": {
+      const source = categoryName(event.details.source.categorySnapshot, text);
+      const target = categoryName(event.details.target.categorySnapshot, text);
+      const status = statusName(event.details.status, text);
+      const placement = taskPlacement(event.details.target.position, text);
+      return placement
+        ? text(
+            `从「${source}」移到「${target}」的${status}区${placement}`,
+            `Moved from ${source} to ${placement} in ${status} · ${target}`,
+          )
+        : text(
+            `从「${source}」移到「${target}」的${status}区`,
+            `Moved from ${source} to ${status} · ${target}`,
+          );
+    }
+    case "task.moved_to_inbox_by_category_deletion": {
+      const source = categoryName(event.details.source.categorySnapshot, text);
+      const status = statusName(event.details.status, text);
+      const placement = taskPlacement(event.details.targetPosition, text);
+      return placement
+        ? text(
+            `因删除「${source}」移到收件箱${status}区${placement}`,
+            `Moved to ${placement} in ${status} · Inbox when ${source} was deleted`,
+          )
+        : text(
+            `因删除「${source}」移到收件箱${status}区`,
+            `Moved to ${status} · Inbox when ${source} was deleted`,
+          );
+    }
     case "task.trashed":
       return text(
-        `从${categoryName(event.details.categorySnapshot, text)}移入垃圾箱`,
-        `Moved from ${categoryName(event.details.categorySnapshot, text)} to Trash`,
+        `从「${categoryName(event.details.categorySnapshot, text)}」的${statusName(event.details.status, text)}区移入垃圾箱`,
+        `Moved from ${statusName(event.details.status, text)} · ${categoryName(event.details.categorySnapshot, text)} to Trash`,
       );
-    case "task.restored":
-      return text(
-        `恢复到${categoryName(event.details.categorySnapshot, text)}`,
-        `Restored to ${categoryName(event.details.categorySnapshot, text)}`,
-      );
+    case "task.restored": {
+      const category = categoryName(event.details.categorySnapshot, text);
+      const status = statusName(event.details.status, text);
+      const placement = taskPlacement(event.details.position, text);
+      return placement
+        ? text(
+            `恢复到「${category}」的${status}区${placement}`,
+            `Restored to ${placement} in ${status} · ${category}`,
+          )
+        : text(
+            `恢复到「${category}」的${status}区`,
+            `Restored to ${status} · ${category}`,
+          );
+    }
     case "category.created":
       return text("创建分类", "Created category");
     case "category.renamed":
       return text(
-        `从「${event.details.beforeName}」重命名`,
-        `Renamed from “${event.details.beforeName}”`,
+        `从「${event.details.beforeName}」重命名为「${event.subject.name}」`,
+        `Renamed from “${event.details.beforeName}” to “${event.subject.name}”`,
       );
     case "category.reordered":
-      return text("调整分类顺序", "Reordered category");
+      return categoryPlacement(event.details.afterPosition, text);
     case "category.deleted":
-      return text(
-        `删除分类，移动 ${event.details.affectedTaskCount} 个任务到收件箱`,
-        `Deleted category and moved ${event.details.affectedTaskCount} tasks to Inbox`,
-      );
+      return event.details.affectedTaskCount === 0
+        ? text("删除分类，没有任务被移动", "Deleted category; no tasks were moved")
+        : text(
+            `删除分类，将${countTasks(event.details.affectedTaskCount, text)}移到收件箱`,
+            `Deleted category and moved ${countTasks(event.details.affectedTaskCount, text)} to Inbox`,
+          );
   }
 }
 
@@ -315,7 +404,10 @@ function matchesCategory(event: HistoryEvent, categoryId: string): boolean {
   }
 }
 
-function collectCategorySnapshots(value: unknown, result: Map<string, string>): void {
+function collectCategorySnapshots(
+  value: unknown,
+  result: Map<string, Set<string>>,
+): void {
   if (Array.isArray(value)) {
     for (const item of value) collectCategorySnapshots(item, result);
     return;
@@ -330,46 +422,146 @@ function collectCategorySnapshots(value: unknown, result: Map<string, string>): 
     typeof record.name === "string"
   ) {
     const categoryId = (record.ref as Record<string, string>).categoryId;
-    if (!result.has(categoryId)) result.set(categoryId, record.name);
+    const names = result.get(categoryId) ?? new Set<string>();
+    names.add(record.name);
+    result.set(categoryId, names);
   }
   for (const nested of Object.values(record)) collectCategorySnapshots(nested, result);
+}
+
+function compareHistory(left: HistoryEvent, right: HistoryEvent): number {
+  const occurredAt = Date.parse(right.occurredAt) - Date.parse(left.occurredAt);
+  if (occurredAt !== 0) return occurredAt;
+  const sequence = BigInt(right.operationSequence) - BigInt(left.operationSequence);
+  if (sequence !== 0n) return sequence > 0n ? 1 : -1;
+  return left.eventOrder - right.eventOrder;
+}
+
+function localDayKey(value: string): string {
+  const date = new Date(value);
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+interface FilterOption {
+  id: string;
+  label: string;
+  searchText: string;
 }
 
 export function HistoryPage() {
   const { state } = useWorkspace();
   const { locale, text } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [query, setQuery] = useState("");
-  const [group, setGroup] = useState<ActionGroup>("all");
-  const taskSubject = searchParams.get("task");
-  const categorySubject = searchParams.get("category");
-  const subject = taskSubject
-    ? `task:${taskSubject}`
-    : categorySubject
-      ? `category:${categorySubject}`
-      : "all";
+  const initialTaskId = useRef(searchParams.get("task")).current;
+  const initialCategoryId = useRef(searchParams.get("category")).current;
+  const [filters, setFilters] = useState<HistoryFilters>(() => {
+    if (initialTaskId) {
+      sessionFilters = { taskId: initialTaskId, categoryId: null, actions: [] };
+    } else if (initialCategoryId) {
+      sessionFilters = { taskId: null, categoryId: initialCategoryId, actions: [] };
+    }
+    return { ...sessionFilters, actions: [...sessionFilters.actions] };
+  });
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [taskSearch, setTaskSearch] = useState("");
+  const [categorySearch, setCategorySearch] = useState("");
+  const filterRef = useRef<HTMLDivElement>(null);
   const workspace = state.workspace;
 
-  const categories = useMemo(() => {
-    const result = new Map<string, string>();
-    if (!workspace) return result;
-    result.set("inbox", text("收件箱", "Inbox"));
-    for (const category of workspace.categories) result.set(category.id, category.name);
-    const newestEvents = [...workspace.history].sort((left, right) => {
-      const sequence = BigInt(right.operationSequence) - BigInt(left.operationSequence);
-      return sequence === 0n
-        ? right.eventOrder - left.eventOrder
-        : sequence > 0n
-          ? 1
-          : -1;
+  useEffect(() => {
+    if (initialTaskId || initialCategoryId) setSearchParams({}, { replace: true });
+  }, [initialCategoryId, initialTaskId, setSearchParams]);
+
+  useEffect(() => {
+    if (!panelOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!filterRef.current?.contains(event.target as Node)) setPanelOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPanelOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [panelOpen]);
+
+  const updateFilters = (
+    update: HistoryFilters | ((current: HistoryFilters) => HistoryFilters),
+  ) => {
+    setFilters((current) => {
+      const next = typeof update === "function" ? update(current) : update;
+      sessionFilters = { ...next, actions: [...next.actions] };
+      return sessionFilters;
     });
-    for (const event of newestEvents) {
-      if (event.subjectType === "category" && !result.has(event.subject.categoryId)) {
-        result.set(event.subject.categoryId, event.subject.name);
-      }
-      collectCategorySnapshots(event.details, result);
+  };
+
+  const { categoryOptions, taskOptions } = useMemo(() => {
+    const taskNames = new Map<string, Set<string>>();
+    const taskLabels = new Map<string, string>();
+    const categoryNames = new Map<string, Set<string>>();
+    const categoryLabels = new Map<string, string>();
+    if (!workspace) return { categoryOptions: [], taskOptions: [] };
+
+    for (const task of workspace.tasks) {
+      taskNames.set(task.id, new Set([task.title]));
+      taskLabels.set(task.id, task.title);
     }
-    return result;
+    categoryNames.set("inbox", new Set([text("收件箱", "Inbox"), "Inbox", "收件箱"]));
+    categoryLabels.set("inbox", text("收件箱", "Inbox"));
+    for (const category of workspace.categories) {
+      categoryNames.set(category.id, new Set([category.name]));
+      categoryLabels.set(category.id, category.name);
+    }
+
+    for (const event of [...workspace.history].sort(compareHistory)) {
+      if (event.subjectType === "task") {
+        const names = taskNames.get(event.subject.taskId) ?? new Set<string>();
+        names.add(event.subject.title);
+        if (
+          event.eventType === "task.content_changed" &&
+          "beforeTitle" in event.details
+        ) {
+          names.add(event.details.beforeTitle);
+        }
+        taskNames.set(event.subject.taskId, names);
+        if (!taskLabels.has(event.subject.taskId)) {
+          taskLabels.set(event.subject.taskId, event.subject.title);
+        }
+      } else {
+        const names = categoryNames.get(event.subject.categoryId) ?? new Set<string>();
+        names.add(event.subject.name);
+        if (event.eventType === "category.renamed") {
+          names.add(event.details.beforeName);
+        }
+        categoryNames.set(event.subject.categoryId, names);
+        if (!categoryLabels.has(event.subject.categoryId)) {
+          categoryLabels.set(event.subject.categoryId, event.subject.name);
+        }
+      }
+      collectCategorySnapshots(event.details, categoryNames);
+    }
+
+    const makeOptions = (
+      names: Map<string, Set<string>>,
+      labels: Map<string, string>,
+    ): FilterOption[] =>
+      [...names].map(([id, aliases]) => ({
+        id,
+        label: labels.get(id) ?? [...aliases][0] ?? id,
+        searchText: [...aliases].join(" ").toLocaleLowerCase(),
+      }));
+
+    return {
+      taskOptions: makeOptions(taskNames, taskLabels),
+      categoryOptions: makeOptions(categoryNames, categoryLabels),
+    };
   }, [text, workspace]);
 
   const events = useMemo(() => {
@@ -377,29 +569,49 @@ export function HistoryPage() {
     return [...workspace.history]
       .filter((event) => {
         if (
-          taskSubject &&
-          (event.subjectType !== "task" || event.subject.taskId !== taskSubject)
+          filters.taskId &&
+          (event.subjectType !== "task" || event.subject.taskId !== filters.taskId)
         ) {
           return false;
         }
-        if (categorySubject && !matchesCategory(event, categorySubject)) return false;
-        if (group !== "all" && actionGroup(event) !== group) return false;
-        const search = query.trim().toLocaleLowerCase();
-        if (!search) return true;
-        const facts = eventFacts(event, text).flat().join(" ");
-        return `${subjectName(event)} ${eventSummary(event, text)} ${facts}`
-          .toLocaleLowerCase()
-          .includes(search);
+        if (filters.categoryId && !matchesCategory(event, filters.categoryId)) {
+          return false;
+        }
+        return (
+          filters.actions.length === 0 || filters.actions.includes(actionGroup(event))
+        );
       })
-      .sort((left, right) => {
-        const sequence = BigInt(right.operationSequence) - BigInt(left.operationSequence);
-        return sequence === 0n
-          ? right.eventOrder - left.eventOrder
-          : sequence > 0n
-            ? 1
-            : -1;
-      });
-  }, [categorySubject, group, query, taskSubject, text, workspace]);
+      .sort(compareHistory);
+  }, [filters, workspace]);
+
+  const groupedEvents = useMemo(() => {
+    const groups: Array<{ day: string; events: HistoryEvent[] }> = [];
+    for (const event of events) {
+      const day = localDayKey(event.occurredAt);
+      const group = groups.at(-1);
+      if (group?.day === day) group.events.push(event);
+      else groups.push({ day, events: [event] });
+    }
+    return groups;
+  }, [events]);
+
+  const selectedTask = taskOptions.find((option) => option.id === filters.taskId);
+  const selectedCategory = categoryOptions.find(
+    (option) => option.id === filters.categoryId,
+  );
+  const activeFilterCount =
+    Number(Boolean(filters.taskId)) +
+    Number(Boolean(filters.categoryId)) +
+    filters.actions.length;
+  const normalizedTaskSearch = taskSearch.trim().toLocaleLowerCase();
+  const normalizedCategorySearch = categorySearch.trim().toLocaleLowerCase();
+  const visibleTasks = taskOptions.filter(
+    (option) => !normalizedTaskSearch || option.searchText.includes(normalizedTaskSearch),
+  );
+  const visibleCategories = categoryOptions.filter(
+    (option) =>
+      !normalizedCategorySearch || option.searchText.includes(normalizedCategorySearch),
+  );
 
   if (!workspace) return null;
   return (
@@ -413,99 +625,228 @@ export function HistoryPage() {
         <span className="task-count">{events.length}</span>
       </div>
 
-      <div className="history-filters">
-        <label className="search-field">
-          <Search size={17} aria-hidden="true" />
-          <input
-            aria-label={text("搜索历史", "Search history")}
-            placeholder={text("搜索任务或分类", "Search tasks or categories")}
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-          />
-        </label>
-        <label className="filter-field">
-          <Filter size={16} aria-hidden="true" />
-          <select
-            aria-label={text("筛选主体", "Filter subject")}
-            value={subject}
-            onChange={(event) => {
-              const value = event.currentTarget.value;
-              if (value === "all") setSearchParams({});
-              else if (value.startsWith("task:")) {
-                setSearchParams({ task: value.slice(5) });
-              } else setSearchParams({ category: value.slice(9) });
-            }}
-          >
-            <option value="all">
-              {text("全部任务与分类", "All tasks and categories")}
-            </option>
-            <optgroup label={text("任务", "Tasks")}>
-              {workspace.tasks.map((task) => (
-                <option key={task.id} value={`task:${task.id}`}>
-                  {task.title}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label={text("分类", "Categories")}>
-              {[...categories].map(([id, name]) => (
-                <option key={id} value={`category:${id}`}>
-                  {name}
-                </option>
-              ))}
-            </optgroup>
-          </select>
-        </label>
-        <select
-          aria-label={text("筛选动作", "Filter action")}
-          value={group}
-          onChange={(event) => setGroup(event.currentTarget.value as ActionGroup)}
+      <div className="history-filter-shell" ref={filterRef}>
+        <button
+          type="button"
+          className="history-filter-trigger"
+          aria-expanded={panelOpen}
+          aria-controls="history-filter-panel"
+          onClick={() => setPanelOpen((open) => !open)}
         >
-          {actionGroups.map((value) => (
-            <option key={value} value={value}>
-              {actionGroupLabel(value, text)}
-            </option>
-          ))}
-        </select>
+          <Filter size={16} aria-hidden="true" />
+          {text("筛选", "Filter")}
+          {activeFilterCount > 0 ? <span>{activeFilterCount}</span> : null}
+        </button>
+
+        {panelOpen ? (
+          <div
+            id="history-filter-panel"
+            className="history-filter-panel"
+            role="dialog"
+            aria-label={text("筛选历史", "Filter history")}
+          >
+            <div className="history-filter-panel-heading">
+              <strong>{text("筛选历史", "Filter history")}</strong>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={text("关闭筛选", "Close filters")}
+                onClick={() => setPanelOpen(false)}
+              >
+                <X size={17} aria-hidden="true" />
+              </button>
+            </div>
+
+            <fieldset className="history-filter-section">
+              <legend>{text("任务", "Task")}</legend>
+              <label className="history-filter-search">
+                <Search size={15} aria-hidden="true" />
+                <input
+                  aria-label={text("搜索任务", "Search tasks")}
+                  value={taskSearch}
+                  onChange={(event) => setTaskSearch(event.currentTarget.value)}
+                />
+              </label>
+              <div className="history-filter-options">
+                {visibleTasks.map((option) => (
+                  <button
+                    type="button"
+                    className={filters.taskId === option.id ? "selected" : undefined}
+                    aria-pressed={filters.taskId === option.id}
+                    key={option.id}
+                    onClick={() =>
+                      updateFilters((current) => ({
+                        ...current,
+                        taskId: current.taskId === option.id ? null : option.id,
+                      }))
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))}
+                {visibleTasks.length === 0 ? (
+                  <span>{text("没有匹配任务", "No matching tasks")}</span>
+                ) : null}
+              </div>
+            </fieldset>
+
+            <fieldset className="history-filter-section">
+              <legend>{text("分类", "Category")}</legend>
+              <label className="history-filter-search">
+                <Search size={15} aria-hidden="true" />
+                <input
+                  aria-label={text("搜索分类", "Search categories")}
+                  value={categorySearch}
+                  onChange={(event) => setCategorySearch(event.currentTarget.value)}
+                />
+              </label>
+              <div className="history-filter-options">
+                {visibleCategories.map((option) => (
+                  <button
+                    type="button"
+                    className={filters.categoryId === option.id ? "selected" : undefined}
+                    aria-pressed={filters.categoryId === option.id}
+                    key={option.id}
+                    onClick={() =>
+                      updateFilters((current) => ({
+                        ...current,
+                        categoryId: current.categoryId === option.id ? null : option.id,
+                      }))
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))}
+                {visibleCategories.length === 0 ? (
+                  <span>{text("没有匹配分类", "No matching categories")}</span>
+                ) : null}
+              </div>
+            </fieldset>
+
+            <fieldset className="history-filter-section history-action-options">
+              <legend>{text("动作", "Actions")}</legend>
+              {actionGroups.map((group) => (
+                <label key={group}>
+                  <input
+                    type="checkbox"
+                    checked={filters.actions.includes(group)}
+                    onChange={() =>
+                      updateFilters((current) => ({
+                        ...current,
+                        actions: current.actions.includes(group)
+                          ? current.actions.filter((value) => value !== group)
+                          : [...current.actions, group],
+                      }))
+                    }
+                  />
+                  <span>{actionGroupLabel(group, text)}</span>
+                </label>
+              ))}
+            </fieldset>
+          </div>
+        ) : null}
       </div>
+
+      {activeFilterCount > 0 ? (
+        <fieldset
+          className="history-filter-chips"
+          aria-label={text("筛选条件", "Filters")}
+        >
+          {selectedTask ? (
+            <button
+              type="button"
+              onClick={() => updateFilters((current) => ({ ...current, taskId: null }))}
+            >
+              {text("任务", "Task")}: {selectedTask.label}
+              <X size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+          {selectedCategory ? (
+            <button
+              type="button"
+              onClick={() =>
+                updateFilters((current) => ({ ...current, categoryId: null }))
+              }
+            >
+              {text("分类", "Category")}: {selectedCategory.label}
+              <X size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+          {filters.actions.map((group) => (
+            <button
+              type="button"
+              key={group}
+              onClick={() =>
+                updateFilters((current) => ({
+                  ...current,
+                  actions: current.actions.filter((value) => value !== group),
+                }))
+              }
+            >
+              {actionGroupLabel(group, text)}
+              <X size={13} aria-hidden="true" />
+            </button>
+          ))}
+          <button
+            type="button"
+            className="history-filter-clear"
+            onClick={() => updateFilters(emptyFilters)}
+          >
+            {text("清除全部", "Clear all")}
+          </button>
+        </fieldset>
+      ) : null}
 
       {events.length === 0 ? (
         <div className="page-empty">{text("没有匹配的历史", "No matching history")}</div>
       ) : (
-        <ol className="history-list">
-          {events.map((event) => {
-            const facts = eventFacts(event, text);
-            return (
-              <li key={`${event.operationSequence}:${event.eventOrder}`}>
-                <span className={`history-mark history-${actionGroup(event)}`} />
-                <div className="history-copy">
-                  <strong>{subjectName(event)}</strong>
-                  <span>{eventSummary(event, text)}</span>
-                  {facts.length > 0 ? (
-                    <details className="history-details">
-                      <summary>{text("查看详情", "View details")}</summary>
-                      <dl>
-                        {facts.map(([label, value]) => (
-                          <div className="history-fact" key={`${label}:${value}`}>
-                            <dt>{label}</dt>
-                            <dd>{value || text("空", "Empty")}</dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </details>
-                  ) : null}
-                </div>
-                <time dateTime={event.occurredAt}>
-                  {new Intl.DateTimeFormat(locale, {
-                    month: "2-digit",
-                    day: "2-digit",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  }).format(new Date(event.occurredAt))}
-                </time>
-              </li>
-            );
-          })}
-        </ol>
+        groupedEvents.map((group) => (
+          <section className="history-day" key={group.day}>
+            <h2>
+              <time dateTime={group.day}>
+                {new Intl.DateTimeFormat(locale, {
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                  weekday: "short",
+                }).format(new Date(`${group.day}T00:00:00`))}
+              </time>
+            </h2>
+            <ol className="history-list">
+              {group.events.map((event) => {
+                const facts = eventFacts(event, text);
+                return (
+                  <li key={`${event.operationSequence}:${event.eventOrder}`}>
+                    <span className={`history-mark history-${actionGroup(event)}`} />
+                    <div className="history-copy">
+                      <strong>{subjectName(event)}</strong>
+                      <span>{eventSummary(event, text)}</span>
+                      {facts.length > 0 ? (
+                        <details className="history-details">
+                          <summary>{text("查看详情", "View details")}</summary>
+                          <dl>
+                            {facts.map(([label, value]) => (
+                              <div className="history-fact" key={`${label}:${value}`}>
+                                <dt>{label}</dt>
+                                <dd>{value || text("空", "Empty")}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </details>
+                      ) : null}
+                    </div>
+                    <time dateTime={event.occurredAt}>
+                      {new Intl.DateTimeFormat(locale, {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      }).format(new Date(event.occurredAt))}
+                    </time>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        ))
       )}
     </main>
   );

@@ -73,7 +73,7 @@ export class WorkspaceRepository {
   }
 
   read(): Promise<WorkspaceSnapshot> {
-    return readWorkspace(this.handle.core);
+    return readWorkspace(this.handle.core, this.handle.activation.schemaVersion);
   }
 
   async saveDraft(entry: DraftEntry, draft: DraftRecord | null): Promise<void> {
@@ -237,6 +237,11 @@ export class WorkspaceRepository {
       await transaction
         .objectStore("meta")
         .put(mutation.result.meta.nextOperationSequence, "nextOperationSequence");
+      if (this.handle.activation.schemaVersion >= 2) {
+        await transaction
+          .objectStore("meta")
+          .put(this.handle.activation.schemaVersion, "schemaVersion");
+      }
       this.fail("mutation.afterMeta");
       await transaction.done;
     } catch (error) {

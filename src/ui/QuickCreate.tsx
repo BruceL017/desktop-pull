@@ -10,12 +10,14 @@ interface QuickCreateProps {
   entry?: DraftEntry;
   label?: string;
   contextual?: boolean;
+  autoFocus?: boolean;
 }
 
 export function QuickCreate({
   entry = globalDraftEntry,
   label,
   contextual = false,
+  autoFocus = false,
 }: QuickCreateProps) {
   const { text } = useI18n();
   const { draftFor, endQuickCreateSession, submitDraft, updateDraft } = useWorkspace();
@@ -24,6 +26,10 @@ export function QuickCreate({
   const inputRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const restoredGenerationRef = useRef<string | undefined>(undefined);
+  const endSessionRef = useRef(endQuickCreateSession);
+  const entryRef = useRef(entry);
+  endSessionRef.current = endQuickCreateSession;
+  entryRef.current = entry;
 
   useEffect(() => {
     if (draft && inputRef.current && restoredGenerationRef.current !== draft.generation) {
@@ -31,6 +37,17 @@ export function QuickCreate({
       restoredGenerationRef.current = draft.generation;
     }
   }, [draft]);
+
+  useEffect(() => {
+    if (autoFocus) requestAnimationFrame(() => inputRef.current?.focus());
+  }, [autoFocus]);
+
+  useEffect(
+    () => () => {
+      endSessionRef.current(entryRef.current);
+    },
+    [],
+  );
 
   function submit(): void {
     if (!submitDraft(entry)) return;
@@ -45,6 +62,7 @@ export function QuickCreate({
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
     if (event.key === "Escape") {
+      endQuickCreateSession(entry);
       event.currentTarget.blur();
       return;
     }

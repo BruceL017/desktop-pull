@@ -56,7 +56,7 @@ test("mobile opens the same global entry from the fixed plus and creates a task"
   const input = page.getByRole("textbox", { name: "快速添加任务" });
   await expect(input).toBeFocused();
   await input.fill("移动任务");
-  await page.getByRole("button", { name: "添加任务" }).click();
+  await page.getByRole("button", { name: "添加任务", exact: true }).click();
 
   await expect(page.getByText("移动任务")).toBeVisible();
   await expect(input).toBeFocused();

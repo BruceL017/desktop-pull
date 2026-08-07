@@ -3,6 +3,7 @@ import { emptyWorkspace } from "../../src/domain/workspace";
 import {
   createEmergencyBackup,
   downloadEmergencyBackup,
+  parseBackup,
 } from "../../src/storage/emergency-backup";
 
 const createObjectURLDescriptor = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
@@ -32,7 +33,7 @@ describe("emergency backup", () => {
       format: "desktop-pull-backup",
       formatVersion: 1,
       schemaVersion: 1,
-      appVersion: "0.1.0",
+      appVersion: "0.2.0",
       exportedAt: "2026-08-06T01:02:03.004Z",
       data: workspace,
     });
@@ -69,5 +70,18 @@ describe("emergency backup", () => {
 
     vi.runAllTimers();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:desktop-pull-backup");
+  });
+
+  it("continues to import valid backups exported by app version 0.1.0", () => {
+    expect(
+      parseBackup({
+        format: "desktop-pull-backup",
+        formatVersion: 1,
+        schemaVersion: 1,
+        appVersion: "0.1.0",
+        exportedAt: "2026-08-06T01:02:03.004Z",
+        data: emptyWorkspace(),
+      }),
+    ).toEqual(emptyWorkspace());
   });
 });

@@ -15,7 +15,7 @@ import {
   freezeTaskTrash,
   type WorkspaceMutation,
 } from "../../src/domain/operations";
-import { historyEventSchema } from "../../src/domain/schemas";
+import { backupDataSchema, historyEventSchema } from "../../src/domain/schemas";
 import { emptyWorkspace, type WorkspaceSnapshot } from "../../src/domain/workspace";
 
 const ids = {
@@ -183,5 +183,92 @@ describe("workspace operations", () => {
     expect(cleanup?.result.meta.nextOperationSequence).toBe(
       workspace.meta.nextOperationSequence,
     );
+  });
+
+  it("rejects malformed task-position references in imported workspaces", () => {
+    let workspace = createTask(emptyWorkspace(), "Alpha", ids.alpha, 1);
+    workspace = createTask(workspace, "Beta", ids.beta, 2, ids.alpha);
+    const malformed = structuredClone(workspace);
+    const created = malformed.history.find(
+      (event) => event.eventType === "task.created" && event.subject.taskId === ids.beta,
+    );
+    expect(created?.eventType).toBe("task.created");
+    if (created?.eventType !== "task.created") return;
+    created.details.position.previousTask = {
+      kind: "task",
+      taskId: ids.beta,
+      title: "Beta",
+    };
+
+    expect(backupDataSchema.safeParse(malformed).success).toBe(false);
+  });
+
+  it("validates compound history operations while accepting cleaned projections", () => {
+    let workspace = createTask(emptyWorkspace(), "Alpha", ids.alpha, 1);
+    workspace = freezeCategoryCreate(workspace, "Work", ids.alpha, {
+      categoryId: ids.categoryA,
+      occurredAt: "2026-01-02T00:00:00.000Z",
+    }).result;
+    expect(backupDataSchema.safeParse(workspace).success).toBe(true);
+
+    const orphan = structuredClone(workspace);
+    const createSequence = orphan.history.find(
+      (event) => event.eventType === "category.created",
+    )?.operationSequence;
+    orphan.history = orphan.history.filter(
+      (event) =>
+        !(
+          event.operationSequence === createSequence &&
+          event.eventType === "category.created"
+        ),
+    );
+    expect(backupDataSchema.safeParse(orphan).success).toBe(false);
+
+    const mismatched = structuredClone(workspace);
+    const moved = mismatched.history.find(
+      (event) =>
+        event.operationSequence === createSequence &&
+        event.eventType === "task.category_changed",
+    );
+    expect(moved?.eventType).toBe("task.category_changed");
+    if (moved?.eventType !== "task.category_changed") return;
+    if (!("name" in moved.details.target.categorySnapshot)) return;
+    moved.details.target.categorySnapshot.name = "Wrong category";
+    expect(backupDataSchema.safeParse(mismatched).success).toBe(false);
+
+    workspace = freezeTaskTrash(workspace, ids.alpha, {
+      occurredAt: "2026-01-03T00:00:00.000Z",
+    }).result;
+    const cleaned = result(freezePermanentDelete(workspace, [ids.alpha]));
+    expect(backupDataSchema.safeParse(cleaned).success).toBe(true);
+    expect(
+      cleaned.history.some(
+        (event) =>
+          event.operationSequence === createSequence &&
+          event.eventType === "category.created",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects category-deletion events outside their declared operation bounds", () => {
+    let workspace = createTask(emptyWorkspace(), "Alpha", ids.alpha, 1);
+    workspace = freezeCategoryCreate(workspace, "Work", ids.alpha, {
+      categoryId: ids.categoryA,
+      occurredAt: "2026-01-02T00:00:00.000Z",
+    }).result;
+    workspace = freezeCategoryDelete(workspace, ids.categoryA, {
+      occurredAt: "2026-01-03T00:00:00.000Z",
+    }).result;
+    const malformed = structuredClone(workspace);
+    const moved = malformed.history.find(
+      (event) => event.eventType === "task.moved_to_inbox_by_category_deletion",
+    );
+    expect(moved?.eventType).toBe("task.moved_to_inbox_by_category_deletion");
+    if (moved?.eventType !== "task.moved_to_inbox_by_category_deletion") {
+      return;
+    }
+    moved.eventOrder = 2;
+
+    expect(backupDataSchema.safeParse(malformed).success).toBe(false);
   });
 });

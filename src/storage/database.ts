@@ -13,6 +13,11 @@ import {
 import type { WorkspaceSnapshot } from "../domain/workspace";
 import { categoryRefKey, draftEntryKey } from "../domain/workspace";
 import {
+  prepareApplicationVersion,
+  promoteApplicationVersion,
+  rollbackApplicationVersion,
+} from "./app-version-manager";
+import {
   APP_VERSION,
   CONTROL_DATABASE_NAME,
   CONTROL_DATABASE_VERSION,
@@ -77,30 +82,41 @@ function validateControlSchema(control: IDBPDatabase<ControlDatabaseSchema>): vo
 
 async function openCoreDatabase(
   generation: string,
+  version: 1 | 2,
 ): Promise<IDBPDatabase<CoreDatabaseSchema>> {
-  return openDB<CoreDatabaseSchema>(coreDatabaseName(generation), CORE_DATABASE_VERSION, {
+  return openDB<CoreDatabaseSchema>(coreDatabaseName(generation), version, {
     upgrade(database, oldVersion, _newVersion, transaction) {
-      if (oldVersion !== 0) return;
-      database.createObjectStore("tasks", { keyPath: "id" });
-      database.createObjectStore("categories", { keyPath: "id" });
-      database.createObjectStore("taskOrderByCategory");
-      database.createObjectStore("drafts");
-      const history = database.createObjectStore("history");
-      history.createIndex("byTaskSubject", "subject.taskId");
-      history.createIndex("byCategorySubject", "subject.categoryId");
-      database.createObjectStore("meta");
+      if (oldVersion === 0) {
+        database.createObjectStore("tasks", { keyPath: "id" });
+        database.createObjectStore("categories", { keyPath: "id" });
+        database.createObjectStore("taskOrderByCategory");
+        database.createObjectStore("drafts");
+        const history = database.createObjectStore("history");
+        history.createIndex("byTaskSubject", "subject.taskId");
+        history.createIndex("byCategorySubject", "subject.categoryId");
+        database.createObjectStore("meta");
 
-      transaction
-        .objectStore("taskOrderByCategory")
-        .put({ categoryRef: { kind: "inbox" }, taskIds: [] }, "inbox");
-      transaction.objectStore("meta").put([], "categoryOrder");
-      transaction.objectStore("meta").put("1", "nextOperationSequence");
+        transaction
+          .objectStore("taskOrderByCategory")
+          .put({ categoryRef: { kind: "inbox" }, taskIds: [] }, "inbox");
+        transaction.objectStore("meta").put([], "categoryOrder");
+        transaction.objectStore("meta").put("1", "nextOperationSequence");
+      }
+      if (oldVersion < 2 && version >= 2) {
+        transaction.objectStore("meta").put(2, "schemaVersion");
+      }
     },
   });
 }
 
-function validatePhysicalSchema(core: IDBPDatabase<CoreDatabaseSchema>): void {
-  if (JSON.stringify([...core.objectStoreNames]) !== JSON.stringify(expectedStores)) {
+function validatePhysicalSchema(
+  core: IDBPDatabase<CoreDatabaseSchema>,
+  schemaVersion: 1 | 2,
+): void {
+  if (
+    core.version !== schemaVersion ||
+    JSON.stringify([...core.objectStoreNames]) !== JSON.stringify(expectedStores)
+  ) {
     throw new Error("核心数据库 object store 结构不匹配");
   }
   const transaction = core.transaction(expectedStores, "readonly");
@@ -145,8 +161,9 @@ function validatePhysicalSchema(core: IDBPDatabase<CoreDatabaseSchema>): void {
 
 export async function readWorkspace(
   core: IDBPDatabase<CoreDatabaseSchema>,
+  schemaVersion: 1 | 2 = CORE_DATABASE_VERSION,
 ): Promise<WorkspaceSnapshot> {
-  validatePhysicalSchema(core);
+  validatePhysicalSchema(core, schemaVersion);
   const transaction = core.transaction(expectedStores, "readonly");
   const [
     tasks,
@@ -159,6 +176,7 @@ export async function readWorkspace(
     historyKeys,
     categoryOrder,
     nextSequence,
+    storedSchemaVersion,
     metaKeys,
   ] = await Promise.all([
     transaction.objectStore("tasks").getAll(),
@@ -171,6 +189,7 @@ export async function readWorkspace(
     transaction.objectStore("history").getAllKeys(),
     transaction.objectStore("meta").get("categoryOrder"),
     transaction.objectStore("meta").get("nextOperationSequence"),
+    transaction.objectStore("meta").get("schemaVersion"),
     transaction.objectStore("meta").getAllKeys(),
   ]);
   await transaction.done;
@@ -187,7 +206,14 @@ export async function readWorkspace(
         JSON.stringify([event.operationSequence, event.eventOrder]),
     ) ||
     JSON.stringify([...metaKeys].sort()) !==
-      JSON.stringify(["categoryOrder", "nextOperationSequence"])
+      JSON.stringify(
+        schemaVersion === 1
+          ? ["categoryOrder", "nextOperationSequence"]
+          : ["categoryOrder", "nextOperationSequence", "schemaVersion"],
+      ) ||
+    (schemaVersion === 1
+      ? storedSchemaVersion !== undefined
+      : storedSchemaVersion !== schemaVersion)
   ) {
     throw new Error("核心数据库物理键与逻辑记录不匹配");
   }
@@ -208,9 +234,66 @@ function zodUuidArray(value: unknown): string[] {
   return value.map((item) => uuidV4Schema.parse(item));
 }
 
+async function replaceWorkspace(
+  core: IDBPDatabase<CoreDatabaseSchema>,
+  workspace: WorkspaceSnapshot,
+): Promise<void> {
+  const transaction = core.transaction(expectedStores, "readwrite");
+  await Promise.all(
+    expectedStores.map((store) => transaction.objectStore(store).clear()),
+  );
+  for (const task of workspace.tasks) {
+    await transaction.objectStore("tasks").put(task);
+  }
+  for (const category of workspace.categories) {
+    await transaction.objectStore("categories").put(category);
+  }
+  for (const group of workspace.taskOrderByCategory) {
+    await transaction
+      .objectStore("taskOrderByCategory")
+      .put(group, categoryRefKey(group.categoryRef));
+  }
+  for (const draft of workspace.drafts) {
+    await transaction.objectStore("drafts").put(draft, draftEntryKey(draft.entry));
+  }
+  for (const event of workspace.history) {
+    await transaction
+      .objectStore("history")
+      .put(event, [event.operationSequence, event.eventOrder]);
+  }
+  await transaction.objectStore("meta").put(workspace.categoryOrder, "categoryOrder");
+  await transaction
+    .objectStore("meta")
+    .put(workspace.meta.nextOperationSequence, "nextOperationSequence");
+  await transaction.done;
+}
+
+async function coreDatabaseVersions(): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  for (const database of await indexedDB.databases()) {
+    if (database.name?.startsWith("desktop-pull-core-") && database.version) {
+      result.set(database.name, database.version);
+    }
+  }
+  return result;
+}
+
+async function deleteOtherCoreDatabases(activeName: string): Promise<void> {
+  const versions = await coreDatabaseVersions();
+  await Promise.all(
+    [...versions.keys()]
+      .filter((name) => name !== activeName)
+      .map((name) => deleteDatabase(name)),
+  );
+  const remaining = await coreDatabaseVersions();
+  if (remaining.size !== 1 || !remaining.has(activeName)) {
+    throw new Error("无法证明唯一活跃核心数据库代次");
+  }
+}
+
 export async function bootstrapDatabase(): Promise<DatabaseHandle> {
-  const namesBefore = await databaseNames();
-  const coreNames = namesBefore.filter((name) => name.startsWith("desktop-pull-core-"));
+  await databaseNames();
+  let coreVersions = await coreDatabaseVersions();
   const control = await openControlDatabase();
   try {
     validateControlSchema(control);
@@ -228,7 +311,7 @@ export async function bootstrapDatabase(): Promise<DatabaseHandle> {
   let activationValue = await control.get("activation", "current");
 
   if (!activationValue) {
-    if (coreNames.length > 0) {
+    if (coreVersions.size > 0) {
       control.close();
       throw new Error("激活记录缺失，无法安全选择已有核心数据库");
     }
@@ -236,55 +319,103 @@ export async function bootstrapDatabase(): Promise<DatabaseHandle> {
     const initializing = activationRecordSchema.parse({
       state: "initializing",
       generation,
-      schemaVersion: 1,
+      schemaVersion: CORE_DATABASE_VERSION,
       compatibleAppVersion: APP_VERSION,
     });
     await control.put("activation", initializing, "current");
     activationValue = initializing;
   }
 
-  const activation = activationRecordSchema.parse(activationValue);
+  let activation = activationRecordSchema.parse(activationValue);
   const expectedCoreName = coreDatabaseName(activation.generation);
-  if (activation.state === "active") {
-    if (!coreNames.includes(expectedCoreName)) {
-      control.close();
-      throw new Error("无法证明唯一活跃核心数据库代次");
-    }
-    try {
-      await Promise.all(
-        coreNames
-          .filter((name) => name !== expectedCoreName)
-          .map((name) => deleteDatabase(name)),
-      );
-      const remainingCoreNames = (await databaseNames()).filter((name) =>
-        name.startsWith("desktop-pull-core-"),
-      );
-      if (remainingCoreNames.length !== 1 || remainingCoreNames[0] !== expectedCoreName) {
-        throw new Error("无法证明唯一活跃核心数据库代次");
-      }
-    } catch (error) {
-      control.close();
-      throw error;
-    }
-  }
+  let openedCore: IDBPDatabase<CoreDatabaseSchema> | null = null;
   if (
     activation.state === "initializing" &&
-    coreNames.some((name) => name !== expectedCoreName)
+    [...coreVersions.keys()].some((name) => name !== expectedCoreName)
   ) {
     control.close();
     throw new Error("初始化代次与已有核心数据库冲突");
   }
-
-  const core = await openCoreDatabase(activation.generation);
   try {
-    await readWorkspace(core);
-    const active = activationRecordSchema.parse({ ...activation, state: "active" });
-    if (activation.state !== "active") {
-      await control.put("activation", active, "current");
+    if (activation.state === "active") {
+      if (!coreVersions.has(expectedCoreName)) {
+        throw new Error("无法证明唯一活跃核心数据库代次");
+      }
+      if (coreVersions.get(expectedCoreName) !== activation.schemaVersion) {
+        throw new Error("激活记录与核心数据库物理版本不匹配");
+      }
     }
-    return { control, core, activation: active };
+    await prepareApplicationVersion(activation.compatibleAppVersion);
+
+    const source = await openCoreDatabase(
+      activation.generation,
+      activation.schemaVersion,
+    );
+    openedCore = source;
+    const sourceWorkspace = await readWorkspace(source, activation.schemaVersion);
+    if (activation.state === "initializing") {
+      activation = activationRecordSchema.parse({ ...activation, state: "active" });
+      await control.put("activation", activation, "current");
+    }
+
+    if (activation.schemaVersion === CORE_DATABASE_VERSION) {
+      await deleteOtherCoreDatabases(expectedCoreName);
+      await promoteApplicationVersion();
+      return { control, core: source, activation };
+    }
+
+    await deleteOtherCoreDatabases(expectedCoreName);
+    const candidateGeneration = crypto.randomUUID();
+    const candidateName = coreDatabaseName(candidateGeneration);
+    let candidate: IDBPDatabase<CoreDatabaseSchema> | null = null;
+    let activated = false;
+    try {
+      candidate = await openCoreDatabase(candidateGeneration, 1);
+      await replaceWorkspace(candidate, sourceWorkspace);
+      consumeTestFailure("migration.afterCopy");
+      candidate.close();
+      consumeTestFailure("migration.beforeUpgrade");
+      candidate = await openCoreDatabase(candidateGeneration, CORE_DATABASE_VERSION);
+      consumeTestFailure("migration.afterUpgrade");
+      const migratedWorkspace = await readWorkspace(candidate, CORE_DATABASE_VERSION);
+      if (JSON.stringify(migratedWorkspace) !== JSON.stringify(sourceWorkspace)) {
+        throw new Error("候选数据库迁移未逐值保留工作区");
+      }
+      consumeTestFailure("migration.candidateStartup");
+
+      const promoted = activationRecordSchema.parse({
+        state: "active",
+        generation: candidateGeneration,
+        schemaVersion: CORE_DATABASE_VERSION,
+        compatibleAppVersion: APP_VERSION,
+      });
+      consumeTestFailure("migration.beforeActivation");
+      await control.put("activation", promoted, "current");
+      activated = true;
+      consumeTestFailure("migration.afterActivation");
+
+      source.close();
+      await deleteOtherCoreDatabases(candidateName);
+      await promoteApplicationVersion();
+      return { control, core: candidate, activation: promoted };
+    } catch (error) {
+      candidate?.close();
+      source.close();
+      if (!activated) {
+        await deleteDatabase(candidateName);
+        coreVersions = await coreDatabaseVersions();
+        if (
+          coreVersions.size !== 1 ||
+          coreVersions.get(expectedCoreName) !== activation.schemaVersion
+        ) {
+          throw new Error("候选迁移失败后无法证明旧代次完整", { cause: error });
+        }
+        await rollbackApplicationVersion();
+      }
+      throw error;
+    }
   } catch (error) {
-    core.close();
+    openedCore?.close();
     control.close();
     throw error;
   }
