@@ -753,14 +753,20 @@ export const backupDataSchema = z
     }
   });
 
-export const backupEnvelopeSchema = z.strictObject({
-  format: z.literal("desktop-pull-backup"),
-  formatVersion: z.literal(1),
-  schemaVersion: z.literal(1),
-  appVersion: z.union([z.literal("0.1.0"), z.literal("0.2.0")]),
-  exportedAt: utcTimeSchema,
-  data: backupDataSchema,
-});
+export const backupEnvelopeSchema = z
+  .strictObject({
+    format: z.literal("desktop-pull-backup"),
+    formatVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
+    appVersion: z.union([z.literal("0.1.0"), z.literal("0.2.0")]),
+    exportedAt: utcTimeSchema,
+    data: backupDataSchema,
+  })
+  .superRefine(({ appVersion, schemaVersion }, context) => {
+    if (schemaVersion === 2 && appVersion !== "0.2.0") {
+      context.addIssue({ code: "custom", message: "备份与应用版本不兼容" });
+    }
+  });
 
 export type ActivationRecord = z.infer<typeof activationRecordSchema>;
 export type Category = z.infer<typeof categorySchema>;

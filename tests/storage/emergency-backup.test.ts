@@ -32,7 +32,7 @@ describe("emergency backup", () => {
     expect(backup).toEqual({
       format: "desktop-pull-backup",
       formatVersion: 1,
-      schemaVersion: 1,
+      schemaVersion: 2,
       appVersion: "0.2.0",
       exportedAt: "2026-08-06T01:02:03.004Z",
       data: workspace,
@@ -83,5 +83,18 @@ describe("emergency backup", () => {
         data: emptyWorkspace(),
       }),
     ).toEqual(emptyWorkspace());
+  });
+
+  it("rejects a schema v2 backup attributed to app version 0.1.0", () => {
+    expect(() =>
+      parseBackup({
+        format: "desktop-pull-backup",
+        formatVersion: 1,
+        schemaVersion: 2,
+        appVersion: "0.1.0",
+        exportedAt: "2026-08-06T01:02:03.004Z",
+        data: emptyWorkspace(),
+      }),
+    ).toThrow("备份与应用版本不兼容");
   });
 });

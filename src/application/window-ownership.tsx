@@ -29,7 +29,7 @@ interface OwnershipValue {
 }
 
 interface OwnershipMessage {
-  type: "request" | "approved" | "blocked";
+  type: "request" | "approved" | "blocked" | "busy";
   requesterId: string;
 }
 
@@ -54,38 +54,42 @@ export function WindowOwnershipProvider({ children }: { children: ReactNode }) {
     setState(next);
   }, []);
 
-  const acquire = useCallback(() => {
-    if (
-      !navigator.locks ||
-      typeof BroadcastChannel === "undefined" ||
-      cancelledRef.current
-    ) {
-      changeState("unsupported");
-      return;
-    }
-    const lifecycle = lifecycleRef.current;
-    changeState("acquiring");
-    const request = navigator.locks.request(
-      lockName,
-      { ifAvailable: true },
-      async (lock) => {
-        if (cancelledRef.current || lifecycle !== lifecycleRef.current) return;
-        if (!lock) {
-          changeState("inactive");
-          return;
-        }
-        changeState("active");
-        await new Promise<void>((resolve) => {
-          releaseRef.current = resolve;
-        });
-        releaseRef.current = null;
-      },
-    );
-    lockRequestRef.current = request;
-    void request.finally(() => {
-      if (lockRequestRef.current === request) lockRequestRef.current = null;
-    });
-  }, [changeState]);
+  const acquire = useCallback(
+    (onUnavailable?: () => void, pendingState: OwnershipState = "acquiring") => {
+      if (
+        !navigator.locks ||
+        typeof BroadcastChannel === "undefined" ||
+        cancelledRef.current
+      ) {
+        changeState("unsupported");
+        return;
+      }
+      const lifecycle = lifecycleRef.current;
+      changeState(pendingState);
+      const request = navigator.locks.request(
+        lockName,
+        { ifAvailable: true },
+        async (lock) => {
+          if (cancelledRef.current || lifecycle !== lifecycleRef.current) return;
+          if (!lock) {
+            if (onUnavailable) onUnavailable();
+            else changeState("inactive");
+            return;
+          }
+          changeState("active");
+          await new Promise<void>((resolve) => {
+            releaseRef.current = resolve;
+          });
+          releaseRef.current = null;
+        },
+      );
+      lockRequestRef.current = request;
+      void request.finally(() => {
+        if (lockRequestRef.current === request) lockRequestRef.current = null;
+      });
+    },
+    [changeState],
+  );
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -99,8 +103,15 @@ export function WindowOwnershipProvider({ children }: { children: ReactNode }) {
 
     channel.onmessage = (event: MessageEvent<OwnershipMessage>) => {
       const message = event.data;
-      if (message.type === "request" && stateRef.current === "active") {
-        if (handingOffRef.current) return;
+      if (message.type === "request") {
+        if (stateRef.current === "handoff" || handingOffRef.current) {
+          channel.postMessage({
+            type: "busy",
+            requesterId: message.requesterId,
+          } satisfies OwnershipMessage);
+          return;
+        }
+        if (stateRef.current !== "active") return;
         handingOffRef.current = true;
         changeState("handoff");
         void (async () => {
@@ -135,6 +146,7 @@ export function WindowOwnershipProvider({ children }: { children: ReactNode }) {
       if (message.requesterId !== instanceIdRef.current) return;
       if (message.type === "approved") acquire();
       if (message.type === "blocked") changeState("blocked");
+      if (message.type === "busy") changeState("inactive");
     };
 
     const previousRequest = lockRequestRef.current;
@@ -164,11 +176,13 @@ export function WindowOwnershipProvider({ children }: { children: ReactNode }) {
   const requestControl = useCallback(() => {
     if (stateRef.current === "requesting") return;
     changeState("requesting");
-    channelRef.current?.postMessage({
-      type: "request",
-      requesterId: instanceIdRef.current,
-    } satisfies OwnershipMessage);
-  }, [changeState]);
+    acquire(() => {
+      channelRef.current?.postMessage({
+        type: "request",
+        requesterId: instanceIdRef.current,
+      } satisfies OwnershipMessage);
+    }, "requesting");
+  }, [acquire, changeState]);
 
   const value = useMemo<OwnershipValue>(
     () => ({

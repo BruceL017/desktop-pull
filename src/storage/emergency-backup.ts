@@ -1,6 +1,6 @@
 import { backupEnvelopeSchema, type DraftRecord } from "../domain/schemas";
 import type { WorkspaceSnapshot } from "../domain/workspace";
-import { APP_VERSION } from "./database-schema";
+import { APP_VERSION, CORE_DATABASE_VERSION } from "./database-schema";
 
 export function createEmergencyBackup(
   workspace: WorkspaceSnapshot,
@@ -9,7 +9,7 @@ export function createEmergencyBackup(
   return backupEnvelopeSchema.parse({
     format: "desktop-pull-backup",
     formatVersion: 1,
-    schemaVersion: 1,
+    schemaVersion: CORE_DATABASE_VERSION,
     appVersion: APP_VERSION,
     exportedAt,
     data: structuredClone(workspace),

@@ -9,7 +9,7 @@ import {
 } from "../../src/application/window-ownership";
 
 interface Message {
-  type: "request" | "approved" | "blocked";
+  type: "request" | "approved" | "blocked" | "busy";
   requesterId: string;
 }
 
@@ -71,7 +71,25 @@ function BlockingHandler() {
   return <span>Core data</span>;
 }
 
+let finishDelayedHandoff: ((ready: boolean) => void) | undefined;
+
+function DelayedHandler() {
+  const ownership = useWindowOwnership();
+  useEffect(
+    () =>
+      ownership.registerHandoffHandler(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finishDelayedHandoff = resolve;
+          }),
+      ),
+    [ownership],
+  );
+  return <span>Core data</span>;
+}
+
 afterEach(() => {
+  finishDelayedHandoff = undefined;
   FakeBroadcastChannel.instances = [];
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "locks");
@@ -142,6 +160,31 @@ describe("WindowOwnershipProvider", () => {
     });
   });
 
+  it("lets concurrent handoff requesters retry instead of leaving them pending", async () => {
+    vi.stubGlobal("BroadcastChannel", FakeBroadcastChannel);
+    installLocks(true);
+    renderBoundary(<DelayedHandler />);
+    expect(await screen.findByText("Core data")).toBeVisible();
+    const channel = FakeBroadcastChannel.instances[0];
+
+    act(() => {
+      channel.emit({ type: "request", requesterId: "first-window" });
+    });
+    expect(
+      await screen.findByRole("heading", { name: "正在安全移交窗口" }),
+    ).toBeVisible();
+
+    act(() => {
+      channel.emit({ type: "request", requesterId: "second-window" });
+    });
+    expect(channel.messages).toContainEqual({
+      type: "busy",
+      requesterId: "second-window",
+    });
+
+    await act(async () => finishDelayedHandoff?.(true));
+  });
+
   it("acquires control after an inactive window receives approval", async () => {
     vi.stubGlobal("BroadcastChannel", FakeBroadcastChannel);
     const locks = installLocks(false);
@@ -151,12 +194,28 @@ describe("WindowOwnershipProvider", () => {
     const channel = FakeBroadcastChannel.instances[0];
     const request = channel.messages.find(({ type }) => type === "request");
     expect(request).toBeDefined();
+    expect(screen.getByRole("button", { name: "正在请求..." })).toBeDisabled();
 
     locks.setAvailable(true);
     act(() =>
       channel.emit({ type: "approved", requesterId: request?.requesterId ?? "" }),
     );
     await waitFor(() => expect(screen.getByText("Core data")).toBeVisible());
-    expect(locks.request).toHaveBeenCalledTimes(2);
+    expect(locks.request).toHaveBeenCalledTimes(3);
+  });
+
+  it("acquires an available lock when the previous active window has closed", async () => {
+    vi.stubGlobal("BroadcastChannel", FakeBroadcastChannel);
+    const locks = installLocks(false);
+    renderBoundary();
+    const button = await screen.findByRole("button", { name: "在此窗口继续" });
+
+    locks.setAvailable(true);
+    await userEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText("Core data")).toBeVisible());
+    expect(FakeBroadcastChannel.instances[0].messages).not.toContainEqual(
+      expect.objectContaining({ type: "request" }),
+    );
   });
 });
