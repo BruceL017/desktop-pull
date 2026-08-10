@@ -12,10 +12,11 @@
 | 任务包 | 状态 | 产品范围 | 派工前剩余门禁 |
 |---|---|---|---|
 | `TP-M1-01.md` | completed | D-120 的“收件箱快速创建可用纵切片”已实现 | 完成报告与自动化门禁见 `TP-M1-01.report.md`;仓库质量工具由 D-122 追加治理 |
-| `TP-M1-02.md` | ready-for-review | 完成任务内容、优先级与状态闭环 | 独立 PR Agent 审核;见 `TP-M1-02.report.md` |
-| `TP-M1-03.md` | ready-for-review | 分类管理、任务移动与直接拖拽 | 独立 PR Agent 审核与实体触控 Gate;见 `TP-M1-03.report.md` |
-| `TP-M1-04.md` | ready-for-review | 全局历史、垃圾箱与完整备份 | 独立 PR Agent 审核;见 `TP-M1-04.report.md` |
-| `TP-M1-05.md` | ready-for-review | 五路由、PWA、双语、单活动窗口与迁移保护 | 独立 PR Agent 审核、正式平台矩阵与未来真实迁移 Gate;见 `TP-M1-05.report.md` |
+| `TP-M1-02.md` | completed | 完成任务内容、优先级与状态闭环 | 已完成并由 D-123 纳入 M1 关闭,见 `TP-M1-02.report.md` |
+| `TP-M1-03.md` | completed | 分类管理、任务移动与直接拖拽 | 已完成并由 D-123 纳入 M1 关闭,见 `TP-M1-03.report.md` |
+| `TP-M1-04.md` | completed | 全局历史、垃圾箱与完整备份 | 已完成并由 D-123 纳入 M1 关闭,见 `TP-M1-04.report.md` |
+| `TP-M1-05.md` | completed | 五路由、PWA、双语、单活动窗口与迁移保护 | 已完成并由 D-123 纳入 M1 关闭,见 `TP-M1-05.report.md` |
+| `TP-M1-RC-01.md` | completed | 本地发布候选契约审计与已发现偏差修复 | 已完成并由 D-123 关闭,见 `TP-M1-RC-01.report.md` |
 
 ## 一个 packet 必含(缺一不可派工)
 
